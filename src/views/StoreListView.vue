@@ -1419,6 +1419,28 @@ async function saveEditStore() {
     localStorage.setItem('stanley_custom_stores', JSON.stringify(customStores.value));
     window.dispatchEvent(new Event('stanley_stores_updated'));
 
+    // Sync store phone directly into WhatsApp notification settings
+    try {
+      let waSettings = {};
+      const savedWa = localStorage.getItem('stanley_whatsapp_notifications');
+      if (savedWa) waSettings = JSON.parse(savedWa);
+      const newPhone = editStoreForm.value.phone ? editStoreForm.value.phone.trim() : '';
+      for (const k of [storeId, storeCode].filter(Boolean)) {
+        if (!waSettings[k]) {
+          waSettings[k] = { phone: newPhone };
+        } else {
+          waSettings[k].phone = newPhone;
+        }
+      }
+      localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(waSettings));
+      window.dispatchEvent(new Event('stanley_whatsapp_notifications_updated'));
+      fetch('/api/settings/whatsapp_notifications', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ value: waSettings })
+      }).catch(() => {});
+    } catch (e) {}
+
     // 2. Sync Staff Assignments in Master Staff Accounts & Server DB
     const assignedIds = editStoreForm.value.assignedStaffIds || [];
     
@@ -1514,6 +1536,28 @@ async function saveNewStore() {
 
     localStorage.setItem('stanley_custom_stores', JSON.stringify(customStores.value));
     window.dispatchEvent(new Event('stanley_stores_updated'));
+
+    // Sync store phone directly into WhatsApp notification settings
+    try {
+      let waSettings = {};
+      const savedWa = localStorage.getItem('stanley_whatsapp_notifications');
+      if (savedWa) waSettings = JSON.parse(savedWa);
+      const newPhone = newStoreForm.value.phone ? newStoreForm.value.phone.trim() : '';
+      for (const k of [newStoreId, storeCode].filter(Boolean)) {
+        if (!waSettings[k]) {
+          waSettings[k] = { phone: newPhone };
+        } else {
+          waSettings[k].phone = newPhone;
+        }
+      }
+      localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(waSettings));
+      window.dispatchEvent(new Event('stanley_whatsapp_notifications_updated'));
+      fetch('/api/settings/whatsapp_notifications', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ value: waSettings })
+      }).catch(() => {});
+    } catch (e) {}
 
     // Sync assigned staff
     const assignedIds = newStoreForm.value.assignedStaffIds || [];

@@ -1881,10 +1881,64 @@ const currentStore = computed(() => {
 function getStorePhone(store) {
   if (!store) return '0812 3456 7890';
   const key = store.id || store.code;
-  if (whatsappSettings.value[key]?.phone) {
-    return whatsappSettings.value[key].phone;
+
+  // 1. Check store overrides (from StoreListView quick edits)
+  try {
+    const rawOverrides = localStorage.getItem('stanley_store_overrides');
+    if (rawOverrides) {
+      const overrides = JSON.parse(rawOverrides);
+      if (key && overrides[key]?.phone && String(overrides[key].phone).trim()) {
+        return overrides[key].phone.trim();
+      }
+      if (store.id && overrides[store.id]?.phone && String(overrides[store.id].phone).trim()) {
+        return overrides[store.id].phone.trim();
+      }
+      if (store.code && overrides[store.code]?.phone && String(overrides[store.code].phone).trim()) {
+        return overrides[store.code].phone.trim();
+      }
+    }
+  } catch (e) {}
+
+  // 2. Check store.phone directly (from /api/network/stores or database)
+  if (store.phone && String(store.phone).trim()) {
+    return store.phone.trim();
   }
-  return store.phone || '0812 3456 7890';
+
+  // 3. Check whatsappSettings
+  if (key && whatsappSettings.value[key]?.phone && String(whatsappSettings.value[key].phone).trim()) {
+    return whatsappSettings.value[key].phone.trim();
+  }
+
+  return '0812 3456 7890';
+}
+
+function syncStorePhonesToWhatsAppSettings() {
+  const list = allStoresList.value || [];
+  if (list.length === 0) return;
+  let changed = false;
+  for (const st of list) {
+    if (st) {
+      const ph = getStorePhone(st);
+      const key = st.id || st.code;
+      if (key && ph) {
+        if (!whatsappSettings.value[key]) {
+          whatsappSettings.value[key] = {
+            phone: ph,
+            profiles: JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_TEMPLATES))
+          };
+          changed = true;
+        } else if (whatsappSettings.value[key].phone !== ph) {
+          whatsappSettings.value[key].phone = ph;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) {
+    try {
+      localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(whatsappSettings.value));
+    } catch (e) {}
+  }
 }
 
 const currentStoreWhatsappPhone = computed(() => {
@@ -1905,11 +1959,14 @@ function selectStore(store) {
   selectedStoreId.value = store.id || store.code;
   isStoreDropdownOpen.value = false;
   const key = store.id || store.code;
+  const storePhone = getStorePhone(store);
   if (!whatsappSettings.value[key]) {
     whatsappSettings.value[key] = {
-      phone: store.phone || '0812 3456 7890',
+      phone: storePhone,
       profiles: JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_TEMPLATES))
     };
+  } else {
+    whatsappSettings.value[key].phone = storePhone;
   }
   fetchWhatsAppStatus(key);
 }
@@ -2093,6 +2150,26 @@ async function saveStorePhoneForm() {
     
     const matched = rawNetworkStores.value.find(s => s.id === storeObj.id || s.code === storeObj.code);
     if (matched) matched.phone = editingStorePhone.value.trim();
+
+    // Sync storeOverrides & stanley_custom_stores in localStorage
+    try {
+      const storeIdKey = currentStore.value?.id || currentStore.value?.code || '004';
+      const rawOverrides = localStorage.getItem('stanley_store_overrides');
+      const overrides = rawOverrides ? JSON.parse(rawOverrides) : {};
+      overrides[storeIdKey] = { ...(overrides[storeIdKey] || {}), phone: editingStorePhone.value.trim() };
+      localStorage.setItem('stanley_store_overrides', JSON.stringify(overrides));
+
+      const rawCustom = localStorage.getItem('stanley_custom_stores');
+      if (rawCustom) {
+        const customStores = JSON.parse(rawCustom);
+        const idx = customStores.findIndex(s => s.id === storeIdKey || s.code === storeIdKey);
+        if (idx > -1) {
+          customStores[idx].phone = editingStorePhone.value.trim();
+          localStorage.setItem('stanley_custom_stores', JSON.stringify(customStores));
+        }
+      }
+      window.dispatchEvent(new Event('stanley_stores_updated'));
+    } catch (e) {}
 
     triggerToast('Store WhatsApp phone number updated', 'success');
     closeEditStorePhoneModal();
@@ -2329,6 +2406,7 @@ async function loadStoreLocations() {
         rawNetworkStores.value = list;
         storeLocationsList.value = list.map(s => s && s.name).filter(Boolean);
         localStorage.setItem('stanley_custom_stores', JSON.stringify(list));
+        syncStorePhonesToWhatsAppSettings();
       }
     }
   } catch (e) {}
@@ -2589,6 +2667,7 @@ onMounted(async () => {
               rawNetworkStores.value = list;
               storeLocationsList.value = list.map(s => s && s.name).filter(Boolean);
               localStorage.setItem('stanley_custom_stores', JSON.stringify(list));
+              syncStorePhonesToWhatsAppSettings();
             }
           } catch (err) {}
         });
@@ -2648,12 +2727,13 @@ function handleGlobalClick(e) {
   }
 }
 
-function handleStorageUpdate() {
+async function handleStorageUpdate() {
   loadProducts();
   loadSizePresets();
   loadStaffAccounts();
-  loadStoreLocations();
-  loadWhatsAppSettings();
+  await loadStoreLocations();
+  await loadWhatsAppSettings();
+  syncStorePhonesToWhatsAppSettings();
 }
 
 async function persistProducts() {

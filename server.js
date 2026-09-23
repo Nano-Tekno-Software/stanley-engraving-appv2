@@ -454,6 +454,34 @@ app.post('/api/network/stores', requireAdminAccess, async (req, res) => {
     const saved = await saveStoreInDb(store);
     const allStores = await getAllStoresFromDb();
     broadcast('stores_updated', allStores);
+
+    // Synchronize store phone with whatsapp_notifications setting in DB
+    if (store.phone && String(store.phone).trim()) {
+      try {
+        const cleanPhone = String(store.phone).trim();
+        const waSettings = (await getSettingsFromDb('whatsapp_notifications')) || {};
+        const storeKey = store.id || store.code;
+        const codeKey = store.code;
+        
+        let updated = false;
+        for (const k of [storeKey, codeKey].filter(Boolean)) {
+          if (!waSettings[k]) {
+            waSettings[k] = { phone: cleanPhone };
+            updated = true;
+          } else if (waSettings[k].phone !== cleanPhone) {
+            waSettings[k].phone = cleanPhone;
+            updated = true;
+          }
+        }
+        if (updated) {
+          const savedWa = await saveSettingsInDb('whatsapp_notifications', waSettings);
+          broadcast('settings_updated', { key: 'whatsapp_notifications', value: savedWa });
+        }
+      } catch (waErr) {
+        console.warn('Notice: Could not sync WhatsApp phone to settings:', waErr.message);
+      }
+    }
+
     res.json({ success: true, store: saved, stores: allStores });
   } catch (err) {
     res.status(400).json({ error: err.message });
