@@ -37,7 +37,8 @@ import {
   disconnectStore,
   sendStoreWhatsAppMessage,
   autoRestoreSessions,
-  setBroadcastHandler
+  setBroadcastHandler,
+  setStorePhoneResolver
 } from './src/server/whatsappManager.js';
 
 
@@ -53,6 +54,18 @@ app.use(express.json({ limit: '2mb' }));
 // Initialize database (PostgreSQL, MySQL, or SQLite)
 initDatabase().catch(err => {
   console.error('❌ Database initialization error:', err);
+});
+
+// Configure resolver so WhatsApp sessions verify linked device phone against database store phone
+setStorePhoneResolver(async (storeId) => {
+  try {
+    const stores = await getAllStoresFromDb();
+    const st = stores.find(s => s.id === storeId || s.code === storeId);
+    if (st && st.phone) return st.phone;
+    const wa = await getSettingsFromDb('whatsapp_notifications');
+    if (wa && wa[storeId]?.phone) return wa[storeId].phone;
+  } catch (e) {}
+  return null;
 });
 
 // Auto-restore any previously linked WhatsApp sessions across stores
@@ -565,7 +578,8 @@ app.get('/api/whatsapp/:storeId/status', async (req, res) => {
 // POST Initiate WhatsApp connection (Generates QR code for store device linking)
 app.post('/api/whatsapp/:storeId/connect', requireAdminAccess, async (req, res) => {
   try {
-    const status = await initStoreWhatsApp(req.params.storeId);
+    const { expectedPhone } = req.body || {};
+    const status = await initStoreWhatsApp(req.params.storeId, { expectedPhone });
     res.json({ success: true, ...status });
   } catch (err) {
     res.status(500).json({ error: err.message });

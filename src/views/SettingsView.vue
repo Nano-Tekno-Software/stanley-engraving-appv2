@@ -1491,6 +1491,37 @@
           </div>
 
           <div class="modal-form-content wa-qr-modal-body">
+            <!-- Security Warning Banner: Explicit Store Verification Guard -->
+            <div class="wa-security-banner">
+              <div class="wa-security-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+              </div>
+              <div class="wa-security-text">
+                <span class="wa-security-title">Official Store Device Only</span>
+                <span class="wa-security-desc">
+                  Pairing is strictly locked to this store's registered WhatsApp number: <strong>{{ currentStoreWhatsappPhone }}</strong>. Scanning from any personal device will be rejected and unlinked automatically.
+                </span>
+              </div>
+            </div>
+
+            <!-- Mismatch Rejection Alert (If scanned device didn't match) -->
+            <div v-if="waStoreStatus.status === 'rejected_mismatch' || waStoreStatus.error" class="wa-rejection-alert">
+              <div class="wa-rejection-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="12" y1="8" x2="12" y2="12"/>
+                  <line x1="12" y1="16" x2="12.01" y2="16"/>
+                </svg>
+              </div>
+              <div class="wa-rejection-text">
+                <span class="wa-rejection-title">Device Mismatch Rejected</span>
+                <span class="wa-rejection-desc">{{ waStoreStatus.error || 'The scanned WhatsApp device does not match the official store number.' }}</span>
+              </div>
+              <button type="button" class="btn-wa-reconnect" @click="openWhatsAppQrModal">Retry</button>
+            </div>
+
             <div class="wa-qr-split-grid">
               <!-- Left: Step-by-Step Instructions -->
               <div class="wa-qr-steps-list">
@@ -2194,10 +2225,13 @@ async function fetchWhatsAppStatus(storeId) {
         connected: Boolean(data.connected),
         status: data.status || 'disconnected',
         phone: data.phone || null,
-        qr: data.qr || null
+        qr: data.qr || null,
+        error: data.error || null
       };
 
-      if (data.connected && showWhatsAppQrModal.value) {
+      if (data.status === 'rejected_mismatch') {
+        stopWaPolling();
+      } else if (data.connected && showWhatsAppQrModal.value) {
         showWhatsAppQrModal.value = false;
         stopWaPolling();
         triggerToast(`WhatsApp device linked successfully for ${currentStore.value?.name || 'Store'}!`, 'success');
@@ -2224,15 +2258,21 @@ function stopWaPolling() {
 
 async function openWhatsAppQrModal() {
   const storeId = currentStore.value?.id || currentStore.value?.code || 'SG001';
+  const expectedPhone = currentStoreWhatsappPhone.value || null;
   showWhatsAppQrModal.value = true;
   isConnectingWa.value = true;
+  waStoreStatus.value.error = null;
 
   try {
     const token = localStorage.getItem('stanley_staff_token');
-    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
     const res = await fetch(`/api/whatsapp/${encodeURIComponent(storeId)}/connect`, {
       method: 'POST',
-      headers
+      headers,
+      body: JSON.stringify({ expectedPhone })
     });
     if (res.ok) {
       const data = await res.json();
@@ -2240,7 +2280,8 @@ async function openWhatsAppQrModal() {
         connected: Boolean(data.connected),
         status: data.status || 'connecting',
         phone: data.phone || null,
-        qr: data.qr || null
+        qr: data.qr || null,
+        error: data.error || null
       };
     }
   } catch (err) {
@@ -2615,9 +2656,13 @@ onMounted(async () => {
                 connected: Boolean(data.connected),
                 status: data.status || 'disconnected',
                 phone: data.phone || null,
-                qr: data.qr || null
+                qr: data.qr || null,
+                error: data.error || null
               };
-              if (data.connected && showWhatsAppQrModal.value) {
+              if (data.status === 'rejected_mismatch') {
+                stopWaPolling();
+                triggerToast(data.error || 'Scanned device does not match store phone number', 'error');
+              } else if (data.connected && showWhatsAppQrModal.value) {
                 showWhatsAppQrModal.value = false;
                 stopWaPolling();
                 triggerToast(`WhatsApp device linked for ${currentStore.value?.name || 'Store'}!`, 'success');
@@ -5723,6 +5768,89 @@ async function deleteStaff(user) {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.wa-security-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.wa-security-icon {
+  color: #2563EB;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.wa-security-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #475569;
+}
+
+.wa-security-title {
+  font-weight: 600;
+  color: #0F172A;
+  font-size: 13px;
+}
+
+.wa-security-desc strong {
+  color: #0F172A;
+}
+
+.wa-rejection-alert {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #FEF2F2;
+  border: 1px solid #FCA5A5;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.wa-rejection-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.wa-rejection-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #991B1B;
+}
+
+.wa-rejection-title {
+  font-weight: 700;
+  color: #991B1B;
+  font-size: 13px;
+}
+
+.btn-wa-reconnect {
+  background: #DC2626;
+  color: #FFFFFF;
+  border: none;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+.btn-wa-reconnect:hover {
+  opacity: 0.9;
 }
 
 .wa-qr-split-grid {

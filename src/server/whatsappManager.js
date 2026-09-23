@@ -33,22 +33,43 @@ function notifyStatusUpdate(storeId) {
   }
 }
 
+let storePhoneResolver = null;
+
+export function setStorePhoneResolver(resolver) {
+  storePhoneResolver = resolver;
+}
+
+export function normalizePhoneDigits(phone, defaultCountryCode = '62') {
+  if (!phone) return '';
+  let digits = String(phone).replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) {
+    digits = defaultCountryCode + digits.slice(1);
+  } else if (digits.length === 8 && (digits.startsWith('8') || digits.startsWith('9'))) {
+    digits = '65' + digits;
+  }
+  return digits;
+}
+
+export function arePhonesMatching(phoneA, phoneB) {
+  const normA = normalizePhoneDigits(phoneA);
+  const normB = normalizePhoneDigits(phoneB);
+  if (!normA || !normB) return false;
+  if (normA === normB) return true;
+  if (normA.endsWith(normB) || normB.endsWith(normA)) {
+    const minLen = Math.min(normA.length, normB.length);
+    if (minLen >= 8) return true;
+  }
+  return false;
+}
+
 /**
  * Format any international or local phone number to WhatsApp JID (@s.whatsapp.net)
  */
 export function formatToWhatsAppJid(phone, defaultCountryCode = '62') {
   if (!phone) return null;
-  let digits = String(phone).replace(/\D/g, '');
+  let digits = normalizePhoneDigits(phone, defaultCountryCode);
   if (!digits) return null;
-
-  // Handle leading 0 (e.g. Indonesian local format 0812...)
-  if (digits.startsWith('0')) {
-    digits = defaultCountryCode + digits.slice(1);
-  } else if (digits.length === 8 && (digits.startsWith('8') || digits.startsWith('9'))) {
-    // Singapore 8-digit standard mobile number
-    digits = '65' + digits;
-  }
-
   return `${digits}@s.whatsapp.net`;
 }
 
@@ -72,6 +93,7 @@ export function getStoreStatus(storeId) {
       connected: false,
       phone: null,
       qr: null,
+      error: null,
       lastUpdated: new Date().toISOString()
     };
   }
@@ -82,6 +104,7 @@ export function getStoreStatus(storeId) {
     connected: session.status === 'connected',
     phone: session.phone || null,
     qr: session.qrCodeDataUrl || null,
+    error: session.error || null,
     lastUpdated: session.lastUpdated || new Date().toISOString()
   };
 }
@@ -98,6 +121,7 @@ export async function initStoreWhatsApp(storeId, options = {}) {
   // If already connected, return existing status
   const existing = sessions.get(storeId);
   if (existing && existing.sock && existing.status === 'connected') {
+    if (options.expectedPhone) existing.expectedPhone = options.expectedPhone;
     return getStoreStatus(storeId);
   }
 
@@ -108,11 +132,19 @@ export async function initStoreWhatsApp(storeId, options = {}) {
     sock: null,
     phone: null,
     qrCodeDataUrl: null,
+    expectedPhone: null,
+    error: null,
     lastUpdated: new Date().toISOString(),
     isManualStop: false
   };
   sessionData.status = 'connecting';
   sessionData.isManualStop = false;
+  sessionData.error = null;
+
+  const expected = options.expectedPhone || (storePhoneResolver ? storePhoneResolver(storeId) : null);
+  if (expected) {
+    sessionData.expectedPhone = expected;
+  }
   sessions.set(storeId, sessionData);
   notifyStatusUpdate(storeId);
 
@@ -156,14 +188,40 @@ export async function initStoreWhatsApp(storeId, options = {}) {
     }
 
     if (connection === 'open') {
-      sessionData.status = 'connected';
-      sessionData.qrCodeDataUrl = null;
-      sessionData.lastUpdated = new Date().toISOString();
-
       // Extract phone number from WhatsApp user object (e.g. '6581234567:12@s.whatsapp.net')
       const rawUser = sock.user?.id || '';
       const cleanPhone = rawUser.split(':')[0].replace(/@.*$/, '');
       sessionData.phone = cleanPhone || sessionData.phone;
+
+      // SECURITY VERIFICATION GUARD: Validate scanned device against expected store phone
+      if (sessionData.expectedPhone) {
+        const matches = arePhonesMatching(cleanPhone, sessionData.expectedPhone);
+        if (!matches) {
+          console.warn(`[WA-${storeId}] SECURITY REJECTION: Linked phone (+${cleanPhone}) does not match expected store phone (${sessionData.expectedPhone}). Aborting session.`);
+          sessionData.status = 'rejected_mismatch';
+          sessionData.error = `Security Rejection: Scanned phone (+${cleanPhone}) does not match official store phone (${sessionData.expectedPhone}). Device unlinked for security.`;
+          sessionData.qrCodeDataUrl = null;
+          sessionData.lastUpdated = new Date().toISOString();
+          notifyStatusUpdate(storeId);
+
+          try {
+            await sock.logout();
+          } catch (logoutErr) {}
+
+          try {
+            if (fs.existsSync(sessionDir)) {
+              fs.rmSync(sessionDir, { recursive: true, force: true });
+            }
+          } catch (rmErr) {}
+
+          return;
+        }
+      }
+
+      sessionData.status = 'connected';
+      sessionData.error = null;
+      sessionData.qrCodeDataUrl = null;
+      sessionData.lastUpdated = new Date().toISOString();
 
       console.log(`[WA-${storeId}] WhatsApp Connected successfully! Linked phone: ${sessionData.phone}`);
       notifyStatusUpdate(storeId);
