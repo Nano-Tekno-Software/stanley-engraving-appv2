@@ -144,9 +144,34 @@ export function sendWhatsAppNotification(order, triggerType = 'order_completed')
     console.warn('Failed to save WhatsApp webhook log to localStorage', e);
   }
 
+  // Asynchronously dispatch to real WhatsApp engine on backend if in browser
+  if (typeof window !== 'undefined' && typeof fetch !== 'undefined' && order.phone && message) {
+    const storeId = order.store_id || order.store_code || order.store || 'SG001';
+    fetch(`/api/whatsapp/${encodeURIComponent(storeId)}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipientPhone: order.phone,
+        message,
+        orderId: order.order_id,
+        triggerType
+      })
+    }).then(res => res.json()).then(data => {
+      if (data.success) {
+        console.log(`[WHATSAPP GATEWAY] Real message sent to ${order.phone} via store ${storeId} (ID: ${data.messageId})`);
+      } else {
+        console.info(`[WHATSAPP GATEWAY] Store ${storeId} message status:`, data.error || data.status);
+      }
+    }).catch(err => {
+      // Offline or network warning
+      console.debug('[WHATSAPP GATEWAY] Dispatch notice:', err.message);
+    });
+  }
+
   console.log(`[WHATSAPP WEBHOOK] Notification dispatched to ${order.phone}: "${webhookPayload.message}"`);
   return webhookPayload;
 }
+
 
 /**
  * Retrieve all WhatsApp webhook logs

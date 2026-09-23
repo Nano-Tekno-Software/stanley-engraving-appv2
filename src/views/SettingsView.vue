@@ -436,6 +436,10 @@
             <div class="default-whatsapp-card">
               <div class="card-step-title-row">
                 <span class="card-heading-title">DEFAULT WHATSAPP NUMBER</span>
+                <div class="wa-status-pill" :class="waConnectionClass">
+                  <span class="wa-status-dot"></span>
+                  <span>{{ waStatusLabel }}</span>
+                </div>
               </div>
 
               <div class="step-interactive-wrap">
@@ -505,6 +509,70 @@
                   </svg>
                   <span>Edit Store WhatsApp Number</span>
                 </button>
+              </div>
+
+              <!-- Zero-Cost WhatsApp Linked Device Gateway Section -->
+              <div class="wa-gateway-section">
+                <div class="wa-gateway-header">
+                  <span class="wa-gateway-label">WHATSAPP GATEWAY</span>
+                  <span class="wa-gateway-badge">Zero Cost Direct</span>
+                </div>
+
+                <!-- Unlinked State -->
+                <div v-if="!waStoreStatus.connected" class="wa-unlinked-box">
+                  <div class="wa-unlinked-desc">
+                    Connect store phone via WhatsApp Linked Devices to send automated order notifications with no monthly platform fees.
+                  </div>
+                  <button 
+                    type="button" 
+                    class="btn-wa-pair"
+                    :disabled="isConnectingWa"
+                    @click="openWhatsAppQrModal"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="3" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="3" width="7" height="7"></rect>
+                      <rect x="14" y="14" width="7" height="7"></rect>
+                      <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span>{{ isConnectingWa ? 'Connecting...' : 'Link Device (QR Code)' }}</span>
+                  </button>
+                </div>
+
+                <!-- Connected State -->
+                <div v-else class="wa-connected-box">
+                  <div class="wa-connected-row">
+                    <div class="wa-active-pill">
+                      <span class="wa-active-dot"></span>
+                      <span>Gateway Active</span>
+                    </div>
+                    <span class="wa-paired-phone">{{ waStoreStatus.phone ? `+${waStoreStatus.phone}` : currentStoreWhatsappPhone }}</span>
+                  </div>
+                  <div class="wa-button-group">
+                    <button 
+                      type="button" 
+                      class="btn-wa-test"
+                      @click="openTestMessageModal"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                      </svg>
+                      <span>Test Message</span>
+                    </button>
+                    <button 
+                      type="button" 
+                      class="btn-wa-disconnect"
+                      :disabled="isDisconnectingWa"
+                      @click="disconnectWhatsAppDevice"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                        <line x1="12" y1="2" x2="12" y2="12"></line>
+                      </svg>
+                      <span>{{ isDisconnectingWa ? 'Unlinking...' : 'Disconnect' }}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
 
             </div>
@@ -1410,6 +1478,147 @@
       </div>
     </Teleport>
 
+    <!-- WHATSAPP LINKED DEVICE QR MODAL (Global Stanley Modal Style) -->
+    <Teleport to="body">
+      <div v-if="showWhatsAppQrModal" class="modal-backdrop">
+        <div class="product-modal-card wa-qr-modal-card fade-in" @click.stop>
+          <div class="modal-header-row">
+            <div class="modal-header-title-stack">
+              <h3 class="modal-title-bold">Link Store WhatsApp Device</h3>
+              <p class="modal-subtitle-text">Pair {{ currentStore?.name || 'Stanley Store' }} phone for automated notifications</p>
+            </div>
+            <button type="button" class="modal-close-icon-btn" @click="closeWhatsAppQrModal" aria-label="Close">✕</button>
+          </div>
+
+          <div class="modal-form-content wa-qr-modal-body">
+            <div class="wa-qr-split-grid">
+              <!-- Left: Step-by-Step Instructions -->
+              <div class="wa-qr-steps-list">
+                <div class="qr-step-row">
+                  <span class="qr-step-badge">1</span>
+                  <div class="qr-step-info">
+                    <span class="qr-step-primary">Open WhatsApp</span>
+                    <span class="qr-step-secondary">Open <strong>WhatsApp</strong> or <strong>WhatsApp Business</strong> on store phone</span>
+                  </div>
+                </div>
+
+                <div class="qr-step-row">
+                  <span class="qr-step-badge">2</span>
+                  <div class="qr-step-info">
+                    <span class="qr-step-primary">Go to Linked Devices</span>
+                    <span class="qr-step-secondary">Tap <strong>Settings</strong> (iOS) or <strong>⋮ Menu</strong> (Android) &gt; <strong>Linked Devices</strong></span>
+                  </div>
+                </div>
+
+                <div class="qr-step-row">
+                  <span class="qr-step-badge">3</span>
+                  <div class="qr-step-info">
+                    <span class="qr-step-primary">Link a Device</span>
+                    <span class="qr-step-secondary">Tap <strong>Link a Device</strong> and authenticate with biometric or PIN</span>
+                  </div>
+                </div>
+
+                <div class="qr-step-row">
+                  <span class="qr-step-badge">4</span>
+                  <div class="qr-step-info">
+                    <span class="qr-step-primary">Scan QR Code</span>
+                    <span class="qr-step-secondary">Point phone camera at this screen to pair</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right: QR Code Visual Container -->
+              <div class="wa-qr-display-box">
+                <div v-if="waStoreStatus.qr" class="wa-qr-frame">
+                  <img :src="waStoreStatus.qr" alt="WhatsApp Pairing QR" class="wa-qr-image" />
+                  <div class="wa-qr-status-indicator">
+                    <span class="wa-live-dot"></span>
+                    <span>Ready to scan • Live sync</span>
+                  </div>
+                </div>
+
+                <div v-else class="wa-qr-loading-frame">
+                  <div class="wa-qr-spinner"></div>
+                  <span class="wa-loading-title">Generating QR Code...</span>
+                  <span class="wa-loading-subtitle">Starting secure session</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bottom Actions: Close Button (Right-aligned, standard height & width, matching global UI) -->
+            <div class="modal-bottom-actions-row wa-qr-bottom-actions">
+              <button 
+                type="button" 
+                class="btn-figma-cancel btn-wa-modal-close" 
+                @click="closeWhatsAppQrModal"
+              >
+                Close
+              </button>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- WHATSAPP SEND TEST MESSAGE MODAL (Global Stanley Modal Style) -->
+    <Teleport to="body">
+      <div v-if="showWhatsAppTestModal" class="modal-backdrop">
+        <div class="product-modal-card wa-test-modal-card fade-in" @click.stop>
+          <div class="modal-header-row">
+            <h3 class="modal-title-bold">Send Test WhatsApp Message</h3>
+            <button type="button" class="modal-close-icon-btn" @click="showWhatsAppTestModal = false" aria-label="Close">✕</button>
+          </div>
+
+          <form @submit.prevent="sendTestMessage" class="modal-form-content">
+            <p class="store-phone-modal-desc">
+              Send a live test notification from <strong>{{ currentStore?.name }}</strong> to verify the connected WhatsApp session.
+            </p>
+
+            <div class="product-name-input-block">
+              <label class="param-col-title" style="display:block; margin-bottom: 6px;">Recipient Phone Number*</label>
+              <input 
+                v-model="testMessagePhone" 
+                type="tel" 
+                class="product-name-underline-input" 
+                placeholder="e.g. +65 8123 4567 or 0812 3456 7890" 
+                required 
+              />
+              <span class="param-helper-text" style="display:block; margin-top: 6px; font-size: 11px; color: #6B7280;">
+                Include country code (e.g. +65 for Singapore, +62 for Indonesia)
+              </span>
+            </div>
+
+            <div class="wa-message-input-section" style="margin-top: 4px;">
+              <label class="param-col-title" style="display:block; margin-bottom: 6px;">Message Text*</label>
+              <textarea 
+                v-model="testMessageText" 
+                rows="4" 
+                class="wa-message-textarea" 
+                placeholder="Type your test message..." 
+                required
+              ></textarea>
+            </div>
+
+            <div class="modal-bottom-actions-row" style="margin-top: 16px;">
+              <button type="button" class="btn-figma-cancel" @click="showWhatsAppTestModal = false">Cancel</button>
+              <button type="submit" class="btn-figma-save" :disabled="isSendingTestMessage">
+                <span v-if="!isSendingTestMessage">Send Test</span>
+                <span v-else class="btn-spinner-inline">
+                  <svg class="spinner-svg" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Sending...
+                </span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </Teleport>
+
+
     <!-- FLOATING TOAST NOTIFICATION -->
     <transition name="toast-pop">
       <div v-if="toastVisible" class="toast-notification" :class="{ 'toast-error': toastType === 'error' }">
@@ -1609,6 +1818,35 @@ const showEditStorePhoneModal = ref(false);
 const editingStorePhone = ref('');
 const isSavingStorePhone = ref(false);
 
+// WhatsApp Linked Device Gateway State
+const waStoreStatus = ref({
+  connected: false,
+  status: 'disconnected',
+  phone: null,
+  qr: null
+});
+const isConnectingWa = ref(false);
+const isDisconnectingWa = ref(false);
+const showWhatsAppQrModal = ref(false);
+const showWhatsAppTestModal = ref(false);
+const testMessagePhone = ref('');
+const testMessageText = ref('');
+const isSendingTestMessage = ref(false);
+let waPollTimer = null;
+
+const waConnectionClass = computed(() => {
+  if (waStoreStatus.value.connected) return 'status-connected';
+  if (waStoreStatus.value.status === 'connecting' || waStoreStatus.value.status === 'qr_ready') return 'status-pending';
+  return 'status-disconnected';
+});
+
+const waStatusLabel = computed(() => {
+  if (waStoreStatus.value.connected) return 'Connected';
+  if (waStoreStatus.value.status === 'qr_ready') return 'Awaiting Scan';
+  if (waStoreStatus.value.status === 'connecting') return 'Connecting...';
+  return 'Not Linked';
+});
+
 const notificationForm = ref({
   id: '',
   name: '',
@@ -1673,7 +1911,9 @@ function selectStore(store) {
       profiles: JSON.parse(JSON.stringify(DEFAULT_NOTIFICATION_TEMPLATES))
     };
   }
+  fetchWhatsAppStatus(key);
 }
+
 
 function isSelectedStore(store) {
   const current = currentStore.value;
@@ -1860,6 +2100,160 @@ async function saveStorePhoneForm() {
     triggerToast('Failed to update phone number', 'error');
   } finally {
     isSavingStorePhone.value = false;
+  }
+}
+
+// ----------------------------------------------------
+// ZERO-COST WHATSAPP GATEWAY METHODS (Baileys Linked Device)
+// ----------------------------------------------------
+
+async function fetchWhatsAppStatus(storeId) {
+  const cleanId = storeId || currentStore.value?.id || currentStore.value?.code || 'SG001';
+  try {
+    const res = await fetch(`/api/whatsapp/${encodeURIComponent(cleanId)}/status`);
+    if (res.ok) {
+      const data = await res.json();
+      waStoreStatus.value = {
+        connected: Boolean(data.connected),
+        status: data.status || 'disconnected',
+        phone: data.phone || null,
+        qr: data.qr || null
+      };
+
+      if (data.connected && showWhatsAppQrModal.value) {
+        showWhatsAppQrModal.value = false;
+        stopWaPolling();
+        triggerToast(`WhatsApp device linked successfully for ${currentStore.value?.name || 'Store'}!`, 'success');
+      }
+    }
+  } catch (err) {
+    // Network offline / quiet fail
+  }
+}
+
+function startWaPolling(storeId) {
+  stopWaPolling();
+  waPollTimer = setInterval(() => {
+    fetchWhatsAppStatus(storeId);
+  }, 2500);
+}
+
+function stopWaPolling() {
+  if (waPollTimer) {
+    clearInterval(waPollTimer);
+    waPollTimer = null;
+  }
+}
+
+async function openWhatsAppQrModal() {
+  const storeId = currentStore.value?.id || currentStore.value?.code || 'SG001';
+  showWhatsAppQrModal.value = true;
+  isConnectingWa.value = true;
+
+  try {
+    const token = localStorage.getItem('stanley_staff_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const res = await fetch(`/api/whatsapp/${encodeURIComponent(storeId)}/connect`, {
+      method: 'POST',
+      headers
+    });
+    if (res.ok) {
+      const data = await res.json();
+      waStoreStatus.value = {
+        connected: Boolean(data.connected),
+        status: data.status || 'connecting',
+        phone: data.phone || null,
+        qr: data.qr || null
+      };
+    }
+  } catch (err) {
+    console.warn('Connect error:', err);
+  } finally {
+    isConnectingWa.value = false;
+  }
+
+  startWaPolling(storeId);
+}
+
+function closeWhatsAppQrModal() {
+  showWhatsAppQrModal.value = false;
+  stopWaPolling();
+}
+
+async function disconnectWhatsAppDevice() {
+  const store = currentStore.value;
+  const storeId = store?.id || store?.code || 'SG001';
+  if (!confirm(`Are you sure you want to unlink the WhatsApp device for ${store?.name || 'this store'}?`)) {
+    return;
+  }
+
+  isDisconnectingWa.value = true;
+  try {
+    const token = localStorage.getItem('stanley_staff_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+    const res = await fetch(`/api/whatsapp/${encodeURIComponent(storeId)}/disconnect`, {
+      method: 'POST',
+      headers
+    });
+    if (res.ok) {
+      waStoreStatus.value = {
+        connected: false,
+        status: 'disconnected',
+        phone: null,
+        qr: null
+      };
+      triggerToast('WhatsApp device unlinked successfully', 'success');
+    } else {
+      triggerToast('Failed to unlink WhatsApp device', 'error');
+    }
+  } catch (err) {
+    triggerToast('Network error while unlinking device', 'error');
+  } finally {
+    isDisconnectingWa.value = false;
+  }
+}
+
+function openTestMessageModal() {
+  const store = currentStore.value;
+  testMessagePhone.value = currentStoreWhatsappPhone.value || '';
+  testMessageText.value = `Hi! This is a test notification from ${store?.name || 'Stanley Store'}. Your Stanley cup order has been laser-engraved and is ready for pickup!`;
+  showWhatsAppTestModal.value = true;
+}
+
+async function sendTestMessage() {
+  const store = currentStore.value;
+  const storeId = store?.id || store?.code || 'SG001';
+  if (!testMessagePhone.value.trim() || !testMessageText.value.trim()) {
+    triggerToast('Recipient phone and message are required', 'error');
+    return;
+  }
+
+  isSendingTestMessage.value = true;
+  try {
+    const token = localStorage.getItem('stanley_staff_token');
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    };
+    const res = await fetch(`/api/whatsapp/${encodeURIComponent(storeId)}/send-test`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        recipientPhone: testMessagePhone.value.trim(),
+        message: testMessageText.value.trim()
+      })
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      triggerToast('Test message dispatched via WhatsApp!', 'success');
+      showWhatsAppTestModal.value = false;
+    } else {
+      triggerToast(data.error || 'Failed to dispatch test message', 'error');
+    }
+  } catch (err) {
+    triggerToast('Network error while sending test message', 'error');
+  } finally {
+    isSendingTestMessage.value = false;
   }
 }
 
@@ -2129,10 +2523,30 @@ onMounted(async () => {
     await loadStaffAccounts();
     await loadSizePresets();
     await loadWhatsAppSettings();
+    await fetchWhatsAppStatus(currentStore.value?.id || currentStore.value?.code || 'SG001');
 
     if (typeof EventSource !== 'undefined') {
       try {
         eventSource = new EventSource('/api/events');
+        eventSource.addEventListener('whatsapp_status', (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            const storeKey = currentStore.value?.id || currentStore.value?.code;
+            if (data && (data.storeId === storeKey || !data.storeId)) {
+              waStoreStatus.value = {
+                connected: Boolean(data.connected),
+                status: data.status || 'disconnected',
+                phone: data.phone || null,
+                qr: data.qr || null
+              };
+              if (data.connected && showWhatsAppQrModal.value) {
+                showWhatsAppQrModal.value = false;
+                stopWaPolling();
+                triggerToast(`WhatsApp device linked for ${currentStore.value?.name || 'Store'}!`, 'success');
+              }
+            }
+          } catch (err) {}
+        });
         eventSource.addEventListener('products_updated', (e) => {
           try {
             const data = JSON.parse(e.data);
@@ -2205,7 +2619,15 @@ onMounted(async () => {
   }
 });
 
+watch(currentStore, (newStore) => {
+  if (newStore) {
+    const key = newStore.id || newStore.code;
+    fetchWhatsAppStatus(key);
+  }
+});
+
 onUnmounted(() => {
+  stopWaPolling();
   if (pollInterval) clearInterval(pollInterval);
   if (eventSource) eventSource.close();
   document.removeEventListener('click', handleGlobalClick);
@@ -4742,8 +5164,13 @@ async function deleteStaff(user) {
 }
 
 .card-step-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin-bottom: 16px;
+  gap: 8px;
 }
+
 
 .card-heading-title {
   font-size: 14px;
@@ -4973,6 +5400,434 @@ async function deleteStaff(user) {
 .btn-edit-store-phone:hover {
   color: #374151;
 }
+
+/* WhatsApp Status Pill in Title Row (Matches global status pills) */
+.wa-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: all 0.2s ease;
+}
+
+.wa-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.wa-status-pill.status-connected {
+  background-color: #EAF3E8;
+  color: #2D5A27;
+  border: 1px solid #C6DEC1;
+}
+
+.wa-status-pill.status-connected .wa-status-dot {
+  background-color: #2D5A27;
+  box-shadow: 0 0 0 2px rgba(45, 90, 39, 0.2);
+}
+
+.wa-status-pill.status-pending {
+  background-color: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
+.wa-status-pill.status-pending .wa-status-dot {
+  background-color: #D97706;
+  animation: pulse-dot 1.4s infinite;
+}
+
+.wa-status-pill.status-disconnected {
+  background-color: #F1F5F9;
+  color: #64748B;
+  border: 1px solid #E2E8F0;
+}
+
+.wa-status-pill.status-disconnected .wa-status-dot {
+  background-color: #94A3B8;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+/* Zero-Cost WhatsApp Gateway Section (Aligned with Stanley Cards) */
+.wa-gateway-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #F1F5F9;
+}
+
+.wa-gateway-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.wa-gateway-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #4B5563;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wa-gateway-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #4B5563;
+  background-color: #E5E7EB;
+  padding: 2px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.03em;
+}
+
+.wa-unlinked-box {
+  background: #FAFAFA;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.wa-unlinked-desc {
+  font-size: 12.5px;
+  color: #4B5563;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.btn-wa-pair {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 44.5px;
+  background-color: #000000;
+  color: #FFFFFF;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.btn-wa-pair:hover:not(:disabled) {
+  background-color: #27272A;
+}
+
+.btn-wa-pair:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-wa-pair:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.wa-connected-box {
+  background: #FAFAFA;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.wa-connected-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wa-active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2D5A27;
+}
+
+.wa-active-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: #2D5A27;
+}
+
+.wa-paired-phone {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0F172A;
+}
+
+.wa-button-group {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-wa-test {
+  flex: 1;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: #FFFFFF;
+  border: 1px solid #000000;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #000000;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-wa-test:hover {
+  background-color: #F4F4F5;
+}
+
+.btn-wa-disconnect {
+  height: 40px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background-color: #FFFFFF;
+  border: 1px solid #000000;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #DC2626;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-wa-disconnect:hover:not(:disabled) {
+  background-color: #FEF2F2;
+  border-color: #EF4444;
+  color: #EF4444;
+}
+
+.btn-wa-disconnect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* WhatsApp QR Modal (Consistent with global product-modal-card) */
+.wa-qr-modal-card {
+  width: 100%;
+  max-width: 620px;
+  border-radius: 8px;
+}
+
+.wa-qr-modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.wa-qr-split-grid {
+  display: grid;
+  grid-template-columns: 1fr 230px;
+  gap: 24px;
+  align-items: center;
+}
+
+.wa-qr-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.qr-step-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.qr-step-badge {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background-color: #000000;
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.qr-step-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.qr-step-primary {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.qr-step-secondary {
+  font-size: 12px;
+  color: #6B7280;
+  line-height: 1.4;
+}
+
+.qr-step-secondary strong {
+  color: #111827;
+}
+
+.wa-qr-display-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.wa-qr-frame {
+  background: #FFFFFF;
+  border: 1px solid #E5E7EB;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.wa-qr-image {
+  width: 200px;
+  height: 200px;
+  display: block;
+  border-radius: 4px;
+}
+
+.modal-header-title-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.modal-subtitle-text {
+  font-size: 13px;
+  color: #6B7280;
+  margin: 0;
+  line-height: 1.4;
+  font-weight: 400;
+}
+
+.wa-qr-status-indicator {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2D5A27;
+}
+
+.wa-live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #2D5A27;
+  animation: pulse-dot 1.2s infinite;
+}
+
+.wa-qr-loading-frame {
+  width: 224px;
+  height: 240px;
+  background: #FAFAFA;
+  border: 1px dashed #CBD5E1;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.wa-qr-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #E5E7EB;
+  border-top-color: #000000;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+.wa-loading-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 4px;
+}
+
+.wa-loading-subtitle {
+  font-size: 11px;
+  color: #6B7280;
+}
+
+.wa-qr-bottom-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid #E5E7EB;
+}
+
+.btn-wa-modal-close {
+  flex: 0 0 120px;
+  height: 44px;
+  border: 1px solid #000000;
+  background: #FFFFFF;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #000000;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-wa-modal-close:hover {
+  background: #F4F4F5;
+}
+
+/* WhatsApp Test Modal */
+.wa-test-modal-card {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 8px;
+}
+
+
 
 /* Right Container: Notification List Automation (Figma 498:3339) */
 .automation-list-card {

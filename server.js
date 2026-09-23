@@ -31,6 +31,15 @@ import {
 } from './src/server/db.js';
 
 import { requireAuth, requireSuperAdmin, requireStoreAccess } from './src/server/authMiddleware.js';
+import {
+  getStoreStatus,
+  initStoreWhatsApp,
+  disconnectStore,
+  sendStoreWhatsAppMessage,
+  autoRestoreSessions,
+  setBroadcastHandler
+} from './src/server/whatsappManager.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,6 +54,16 @@ app.use(express.json({ limit: '2mb' }));
 initDatabase().catch(err => {
   console.error('❌ Database initialization error:', err);
 });
+
+// Auto-restore any previously linked WhatsApp sessions across stores
+autoRestoreSessions().then(restored => {
+  if (restored && restored.length > 0) {
+    console.log(`📱 Restored ${restored.length} WhatsApp store session(s): ${restored.join(', ')}`);
+  }
+}).catch(err => {
+  console.warn('⚠️ WhatsApp session restore warning:', err.message);
+});
+
 
 // Rate limiter for customer public order submissions
 const publicOrderLimiter = rateLimit({
@@ -78,10 +97,14 @@ function broadcast(event, data) {
   }
 }
 
+// Register broadcast handler with WhatsApp manager
+setBroadcastHandler(broadcast);
+
 // Periodic heartbeat ping to keep SSE connection alive behind proxies (Coolify/Nginx/Cloudflare)
 setInterval(() => {
   broadcast('ping', { timestamp: Date.now() });
 }, 15000);
+
 
 // ----------------------------------------------------
 // PUBLIC ENDPOINTS (Customer PWA & Ticket View)
@@ -496,6 +519,83 @@ app.post('/api/settings/:key', requireAdminAccess, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ----------------------------------------------------
+// WHATSAPP LINKED DEVICE & NOTIFICATION ENDPOINTS
+// ----------------------------------------------------
+
+// GET WhatsApp status for a store
+app.get('/api/whatsapp/:storeId/status', async (req, res) => {
+  try {
+    const status = getStoreStatus(req.params.storeId);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Initiate WhatsApp connection (Generates QR code for store device linking)
+app.post('/api/whatsapp/:storeId/connect', requireAdminAccess, async (req, res) => {
+  try {
+    const status = await initStoreWhatsApp(req.params.storeId);
+    res.json({ success: true, ...status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Disconnect & Unlink store WhatsApp device
+app.post('/api/whatsapp/:storeId/disconnect', requireAdminAccess, async (req, res) => {
+  try {
+    const result = await disconnectStore(req.params.storeId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Send WhatsApp test message from Admin Settings
+app.post('/api/whatsapp/:storeId/send-test', requireAdminAccess, async (req, res) => {
+  try {
+    const { recipientPhone, message } = req.body;
+    if (!recipientPhone || !message) {
+      return res.status(400).json({ error: 'recipientPhone and message are required' });
+    }
+    const result = await sendStoreWhatsAppMessage(req.params.storeId, recipientPhone, message);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST Dispatch automated notification (Queue, Completion, Pickup)
+app.post('/api/whatsapp/:storeId/dispatch', async (req, res) => {
+  try {
+    const { recipientPhone, message, orderId, triggerType } = req.body;
+    if (!recipientPhone || !message) {
+      return res.status(400).json({ error: 'recipientPhone and message are required' });
+    }
+    const result = await sendStoreWhatsAppMessage(req.params.storeId, recipientPhone, message);
+    
+    // Broadcast notification event to SSE
+    broadcast('whatsapp_notification_dispatched', {
+      storeId: req.params.storeId,
+      orderId,
+      triggerType,
+      recipientPhone,
+      success: result.success,
+      timestamp: new Date().toISOString()
+    });
+
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // Serve frontend static build assets
 const distPath = path.join(__dirname, 'dist');
