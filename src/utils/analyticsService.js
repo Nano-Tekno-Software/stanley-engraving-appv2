@@ -1,17 +1,28 @@
 /**
  * Analytics and Webhook Integration Service
  * Manages ops logging and simulated customer notification webhooks
+ * Enforces server database as the single source of truth without localStorage
  */
 
-const STORAGE_KEY_ANALYTICS = 'stanley_engraving_analytics_logs';
-const STORAGE_KEY_WHATSAPP = 'stanley_whatsapp_webhook_logs';
+// Active in-memory log caches (No localStorage)
+let inMemoryAnalyticsLogs = [];
+let inMemoryWhatsAppLogs = [];
+const recentClientDispatches = new Map();
+
+// Proactively clear any legacy cached notifications in client localStorage
+if (typeof localStorage !== 'undefined') {
+  try {
+    localStorage.removeItem('stanley_whatsapp_notifications');
+    localStorage.removeItem('stanley_whatsapp_webhook_logs');
+    localStorage.removeItem('stanley_engraving_analytics_logs');
+  } catch (e) {}
+}
 
 /**
  * Log completed engraving duration and metadata
  * @param {Object} payload 
  */
 export function logEngravingAnalytics(payload) {
-  const existing = getStoredLogs(STORAGE_KEY_ANALYTICS);
   const logEntry = {
     id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     timestamp: new Date().toISOString(),
@@ -29,15 +40,8 @@ export function logEngravingAnalytics(payload) {
     textLength: payload.text ? payload.text.length : 0
   };
 
-  existing.unshift(logEntry);
-  // Keep last 100 entries in storage
-  if (existing.length > 100) existing.pop();
-
-  try {
-    localStorage.setItem(STORAGE_KEY_ANALYTICS, JSON.stringify(existing));
-  } catch (e) {
-    console.warn('Failed to save analytics log to localStorage', e);
-  }
+  inMemoryAnalyticsLogs.unshift(logEntry);
+  if (inMemoryAnalyticsLogs.length > 100) inMemoryAnalyticsLogs.pop();
 
   return logEntry;
 }
@@ -46,19 +50,22 @@ export function logEngravingAnalytics(payload) {
  * Retrieve all analytics logs
  */
 export function getAnalyticsLogs() {
-  return getStoredLogs(STORAGE_KEY_ANALYTICS);
+  return inMemoryAnalyticsLogs;
 }
 
 /**
  * Clear all stored analytics and webhook logs
  */
 export function clearAnalyticsLogs() {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(STORAGE_KEY_ANALYTICS);
-      localStorage.removeItem(STORAGE_KEY_WHATSAPP);
-    }
-  } catch (e) {}
+  inMemoryAnalyticsLogs = [];
+  inMemoryWhatsAppLogs = [];
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem('stanley_whatsapp_notifications');
+      localStorage.removeItem('stanley_whatsapp_webhook_logs');
+      localStorage.removeItem('stanley_engraving_analytics_logs');
+    } catch (e) {}
+  }
 }
 
 /**
@@ -76,88 +83,61 @@ export function interpolateWhatsAppMessage(template, vars = {}) {
 }
 
 /**
- * Trigger simulated WhatsApp Webhook notification upon job completion or queue events
+ * Trigger WhatsApp notification upon job completion or queue events
+ * Dispatches to backend which pulls official English templates directly from database
  * @param {Object} order 
  * @param {string} triggerType 'order_completed' | 'order_accepted' | 'queue_threshold'
  */
 export function sendWhatsAppNotification(order, triggerType = 'order_completed') {
   if (!order || !order.phone) return null;
 
-  // Retrieve personalized notification templates from storage
+  const dedupKey = `${order.order_id || order.short_code}_${triggerType}`;
+  const now = Date.now();
+  const lastDispatched = recentClientDispatches.get(dedupKey);
+  if (lastDispatched && (now - lastDispatched < 30000)) {
+    console.info(`[WHATSAPP DISPATCH] Deduped notification trigger for ${dedupKey} (already sent ${Math.round((now - lastDispatched)/1000)}s ago)`);
+    return null;
+  }
+  recentClientDispatches.set(dedupKey, now);
+
+  const origin = (typeof window !== 'undefined' && window.location && window.location.origin) 
+    ? window.location.origin 
+    : (process.env.APP_URL || 'http://localhost:3000');
+  const ticketCode = order.short_code || order.system_queue_number || order.intake_code || '';
+  const storeName = order.store_name || 'Stanley Store';
+  const customerName = order.customer_name || 'Customer';
+
+  // Standard English notification for local feedback / logging
   let message = '';
-  let senderPhone = '';
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const rawNotif = localStorage.getItem('stanley_whatsapp_notifications');
-      if (rawNotif) {
-        const parsed = JSON.parse(rawNotif);
-        const storeKey = order.store_id || order.store_code || order.store || 'default';
-        const storeSettings = parsed[storeKey] || parsed['default'] || Object.values(parsed)[0];
-        
-        if (storeSettings) {
-          senderPhone = storeSettings.phone || '';
-          const profiles = storeSettings.profiles || [];
-          const matched = profiles.find(p => p.triggerType === triggerType && p.isActive);
-          if (matched) {
-            message = interpolateWhatsAppMessage(matched.message, {
-              customer_name: order.customer_name,
-              short_code: order.short_code,
-              store_name: order.store_name || 'Stanley Store',
-              order_id: order.order_id,
-              queue_number: order.system_queue_number
-            });
-          }
-        }
-      }
-    }
-  } catch (e) {}
-
-  // Fallback to standard message if no personalized template found
-  if (!message) {
-    const origin = (typeof window !== 'undefined' && window.location && window.location.origin) 
-      ? window.location.origin 
-      : (process.env.APP_URL || 'http://localhost:3000');
-    const ticketCode = order.short_code || order.system_queue_number || order.intake_code || '';
-    const storeName = order.store_name || 'Stanley Store';
-
-    if (triggerType === 'order_accepted') {
-      message = `Hi ${order.customer_name}! Your custom Stanley order #${ticketCode} has been received at ${storeName}. Please wait while we engrave your cup. Track status: ${origin}/queue/${order.order_id}`;
-    } else if (triggerType === 'queue_threshold') {
-      message = `Hi ${order.customer_name}! Our store queue at ${storeName} is currently busy. Thank you for your patience, we will process your order #${ticketCode} shortly. Track queue: ${origin}/queue/${order.order_id}`;
-    } else {
-      message = `Hi ${order.customer_name}! Your custom Stanley order #${ticketCode} is engraved and ready for pickup at ${storeName}. Thank you for shopping with Stanley! Check ticket: ${origin}/queue/${order.order_id}`;
-    }
+  if (triggerType === 'order_accepted') {
+    message = `Hi ${customerName}! Your custom Stanley order #${ticketCode} has been received at ${storeName}. Please wait while we engrave your cup. Track status: ${origin}/queue/${order.order_id}`;
+  } else if (triggerType === 'queue_threshold') {
+    message = `Hi ${customerName}! Our store queue at ${storeName} is currently busy. Thank you for your patience, we will begin engraving your custom Stanley soon. Track queue: ${origin}/queue/${order.order_id}`;
+  } else {
+    message = `Hi ${customerName}! Your custom Stanley order #${ticketCode} is engraved and ready for pickup at ${storeName}. Thank you for shopping with Stanley! Check ticket: ${origin}/queue/${order.order_id}`;
   }
 
-  const existing = getStoredLogs(STORAGE_KEY_WHATSAPP);
   const webhookPayload = {
     id: `wa-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     timestamp: new Date().toISOString(),
     recipientPhone: order.phone,
-    recipientName: order.customer_name,
+    recipientName: customerName,
     orderId: order.order_id,
-    shortCode: order.short_code,
+    shortCode: ticketCode,
     storeId: order.store_id || order.store_code || '',
-    storeName: order.store_name || 'Stanley Store',
-    senderPhone: senderPhone || order.store_phone || '',
+    storeName,
+    senderPhone: order.store_phone || '',
     triggerType,
     message,
     status: 'delivered'
   };
 
-  existing.unshift(webhookPayload);
-  if (existing.length > 50) existing.pop();
-
-  try {
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY_WHATSAPP, JSON.stringify(existing));
-    }
-  } catch (e) {
-    console.warn('Failed to save WhatsApp webhook log to localStorage', e);
-  }
+  inMemoryWhatsAppLogs.unshift(webhookPayload);
+  if (inMemoryWhatsAppLogs.length > 50) inMemoryWhatsAppLogs.pop();
 
   // Asynchronously dispatch to real WhatsApp engine on backend if in browser
-  if (typeof window !== 'undefined' && window.location && window.location.origin && order.phone && message) {
+  // Backend renders the official template directly from the central database
+  if (typeof window !== 'undefined' && window.location && window.location.origin && order.phone) {
     const storeId = order.store_id || order.store_code || order.store || 'SG001';
     const dispatchUrl = new URL(`/api/whatsapp/${encodeURIComponent(storeId)}/dispatch`, window.location.origin).toString();
     fetch(dispatchUrl, {
@@ -165,12 +145,19 @@ export function sendWhatsAppNotification(order, triggerType = 'order_completed')
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         recipientPhone: order.phone,
-        message,
         orderId: order.order_id,
-        triggerType
+        triggerType,
+        customerName,
+        shortCode: ticketCode,
+        storeName,
+        queueNumber: order.system_queue_number || ticketCode,
+        message // Default English message fallback
       })
     }).then(res => res.json()).then(data => {
       if (data.success) {
+        if (data.message) {
+          webhookPayload.message = data.message;
+        }
         console.log(`[WHATSAPP GATEWAY] Real message sent to ${order.phone} via store ${storeId} (ID: ${data.messageId})`);
       } else {
         console.info(`[WHATSAPP GATEWAY] Store ${storeId} message status:`, data.error || data.status);
@@ -180,23 +167,22 @@ export function sendWhatsAppNotification(order, triggerType = 'order_completed')
     });
   }
 
-  console.log(`[WHATSAPP WEBHOOK] Notification dispatched to ${order.phone}: "${webhookPayload.message}"`);
+  console.log(`[WHATSAPP DISPATCH] Notification dispatched to ${order.phone}: "${webhookPayload.message}"`);
   return webhookPayload;
 }
-
 
 /**
  * Retrieve all WhatsApp webhook logs
  */
 export function getWhatsAppLogs() {
-  return getStoredLogs(STORAGE_KEY_WHATSAPP);
+  return inMemoryWhatsAppLogs;
 }
 
 /**
  * Calculate aggregate analytics stats
  */
 export function getAnalyticsSummary() {
-  const logs = getAnalyticsLogs();
+  const logs = inMemoryAnalyticsLogs;
   const totalCompleted = logs.length;
   if (totalCompleted === 0) {
     return {
@@ -223,13 +209,4 @@ function formatDuration(totalSeconds) {
   const mins = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
   const secs = (totalSeconds % 60).toString().padStart(2, '0');
   return `${mins}:${secs}`;
-}
-
-function getStoredLogs(key) {
-  try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null;
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
-  }
 }

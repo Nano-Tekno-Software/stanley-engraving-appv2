@@ -160,18 +160,20 @@
                     <button 
                       v-if="machine.status !== 'engraving'"
                       class="machine-cta-btn start-engraving-btn"
+                      :disabled="isStartingMachineId === machine.id"
                       @click="handleStartEngraving(machine)"
                     >
-                      START ENGRAVING
+                      {{ isStartingMachineId === machine.id ? 'STARTING...' : 'START ENGRAVING' }}
                     </button>
 
                     <!-- State 2: DONE. NOTIFY CUSTOMER (Stanley Green) -->
                     <button 
                       v-else
                       class="machine-cta-btn done-notify-btn"
+                      :disabled="isCompletingMachineId === machine.id"
                       @click="handleDoneNotify(machine)"
                     >
-                      DONE. NOTIFY CUSTOMER
+                      {{ isCompletingMachineId === machine.id ? 'NOTIFYING CUSTOMER...' : 'DONE. NOTIFY CUSTOMER' }}
                     </button>
                   </div>
                 </template>
@@ -285,6 +287,9 @@
           <!-- Large Unique Code Headline & Instructions (Figma 81:2454) -->
           <div class="popup-header-block">
             <h1 class="popup-code-title">#{{ pendingIntakeOrder.intake_code || pendingIntakeOrder.short_code }}</h1>
+            <p v-if="pendingIntakeOrder.status === 'in_queue'" class="already-in-queue-banner">
+              ✓ Order is already registered in queue (#{{ nextAssignedQueueNumber }}). Re-confirming will restore workstation view without sending duplicate WhatsApp.
+            </p>
             <p class="popup-instruction-text">
               Please confirm the order data below with the Customer<br />
               <strong class="cust-highlight-name">{{ pendingIntakeOrder.customer_name }}</strong> before continue.
@@ -354,7 +359,7 @@
               :disabled="isConfirmingIntake"
               @click="handleConfirmIntakeModal"
             >
-              {{ isConfirmingIntake ? 'ADDING TO QUEUE...' : `CONFIRM & ADD TO QUEUE (#${nextAssignedQueueNumber})` }}
+              {{ isConfirmingIntake ? 'ADDING TO QUEUE...' : (pendingIntakeOrder.status === 'in_queue' ? `RESTORE TO WORKSPACE (#${nextAssignedQueueNumber})` : `CONFIRM & ADD TO QUEUE (#${nextAssignedQueueNumber})`) }}
             </button>
             <button class="btn-cancel-queue-cta" :disabled="isConfirmingIntake" @click="showIntakeModal = false">
               CANCEL
@@ -485,6 +490,8 @@ const intakeFeedback = ref('');
 const intakeError = ref(false);
 const isIntakeSearching = ref(false);
 const isConfirmingIntake = ref(false);
+const isStartingMachineId = ref(null);
+const isCompletingMachineId = ref(null);
 const copiedMachineId = ref(null);
 const showAnalyticsModal = ref(false);
 
@@ -718,15 +725,31 @@ function loadOrderToWorkspace(orderId) {
 /**
  * State 1 -> State 2: START ENGRAVING
  */
-function handleStartEngraving(machine) {
-  queueStore.startMachine(machine.id);
+async function handleStartEngraving(machine) {
+  if (isStartingMachineId.value === machine.id) return;
+  isStartingMachineId.value = machine.id;
+  try {
+    queueStore.startMachine(machine.id);
+  } finally {
+    setTimeout(() => {
+      isStartingMachineId.value = null;
+    }, 400);
+  }
 }
 
 /**
  * State 2 -> State 3: DONE. NOTIFY CUSTOMER
  */
-function handleDoneNotify(machine) {
-  queueStore.completeMachine(machine.id);
+async function handleDoneNotify(machine) {
+  if (isCompletingMachineId.value === machine.id) return;
+  isCompletingMachineId.value = machine.id;
+  try {
+    queueStore.completeMachine(machine.id);
+  } finally {
+    setTimeout(() => {
+      isCompletingMachineId.value = null;
+    }, 800);
+  }
 }
 </script>
 
@@ -1528,6 +1551,18 @@ function handleDoneNotify(machine) {
   line-height: 1;
   color: #000000;
   margin: 0;
+}
+
+.already-in-queue-banner {
+  background: #E8F5E9;
+  color: #2E7D32;
+  border: 1px solid #A5D6A7;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 0;
+  text-align: center;
 }
 
 .popup-instruction-text {

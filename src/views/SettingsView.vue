@@ -1959,9 +1959,7 @@ function syncStorePhonesToWhatsAppSettings() {
     }
   }
   if (changed) {
-    try {
-      localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(whatsappSettings.value));
-    } catch (e) {}
+    persistWhatsAppSettings().catch(() => {});
   }
 }
 
@@ -2363,18 +2361,6 @@ async function loadWhatsAppSettings() {
       const val = data && data.value !== undefined ? data.value : data;
       if (val && typeof val === 'object' && Object.keys(val).length > 0) {
         whatsappSettings.value = val;
-        localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(val));
-        return;
-      }
-    }
-  } catch (e) {}
-
-  try {
-    const saved = localStorage.getItem('stanley_whatsapp_notifications');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === 'object') {
-        whatsappSettings.value = parsed;
         return;
       }
     }
@@ -2389,10 +2375,7 @@ async function loadWhatsAppSettings() {
 }
 
 async function persistWhatsAppSettings() {
-  try {
-    localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(whatsappSettings.value));
-    window.dispatchEvent(new Event('stanley_whatsapp_notifications_updated'));
-  } catch (e) {}
+  window.dispatchEvent(new Event('stanley_whatsapp_notifications_updated'));
 
   const token = localStorage.getItem('stanley_staff_token');
   const headers = { 'Content-Type': 'application/json' };
@@ -2717,7 +2700,6 @@ function handleSettingsUpdate(e) {
       localStorage.setItem('stanley_size_presets', JSON.stringify(data.value));
     } else if (data && data.key === 'whatsapp_notifications' && data.value) {
       whatsappSettings.value = data.value;
-      localStorage.setItem('stanley_whatsapp_notifications', JSON.stringify(data.value));
     }
   } catch (err) {}
 }

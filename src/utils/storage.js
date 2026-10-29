@@ -43,11 +43,24 @@ export function saveStoredOrders(orders) {
 export async function fetchServerOrders(storeId = null) {
   try {
     const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
+    const resolvedStore = storeId || (typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null);
     const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-    const url = storeId && storeId !== '*' && storeId !== 'HQ Central'
-      ? `/api/stores/${encodeURIComponent(storeId)}/orders`
-      : '/api/orders';
-    const res = await fetch(url, { headers });
+
+    // Attempt store-specific endpoint first if store is known and staff has credentials
+    if (resolvedStore && resolvedStore !== '*' && resolvedStore !== 'HQ Central') {
+      try {
+        const storeRes = await fetch(`/api/stores/${encodeURIComponent(resolvedStore)}/orders`, { headers });
+        if (storeRes.ok) {
+          const orders = await storeRes.json();
+          if (Array.isArray(orders)) {
+            inMemoryOrders = orders;
+            return orders;
+          }
+        }
+      } catch (err) {}
+    }
+
+    const res = await fetch('/api/orders', { headers });
     if (res.ok) {
       const orders = await res.json();
       if (Array.isArray(orders)) {
@@ -73,6 +86,9 @@ export function clearAllClientStorage() {
       localStorage.removeItem('stanley_machines_state');
       localStorage.removeItem('stanley_custom_stores');
       localStorage.removeItem('stanley_store_overrides');
+      localStorage.removeItem('stanley_whatsapp_notifications');
+      localStorage.removeItem('stanley_whatsapp_webhook_logs');
+      localStorage.removeItem('stanley_engraving_analytics_logs');
       window.dispatchEvent(new Event('stanley_orders_updated'));
       broadcastSyncMessage('orders_updated', []);
     }

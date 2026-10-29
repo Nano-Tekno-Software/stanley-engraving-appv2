@@ -111,6 +111,10 @@ class DatabaseAdapter {
           store_code VARCHAR(100),
           store_id VARCHAR(100),
           store_name VARCHAR(255),
+          assigned_machine VARCHAR(100),
+          intake_at VARCHAR(100),
+          engraving_started_at VARCHAR(100),
+          ready_at VARCHAR(100),
           created_at VARCHAR(100),
           updated_at VARCHAR(100)
         );
@@ -178,6 +182,13 @@ class DatabaseAdapter {
         CREATE INDEX IF NOT EXISTS idx_staff_username ON staff_users (username);
         CREATE INDEX IF NOT EXISTS idx_auth_token ON auth_sessions (token);
       `);
+
+      for (const col of ['assigned_machine VARCHAR(100)', 'intake_at VARCHAR(100)', 'engraving_started_at VARCHAR(100)', 'ready_at VARCHAR(100)']) {
+        try {
+          const colName = col.split(' ')[0];
+          await this.pgPool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS ${col};`);
+        } catch (e) {}
+      }
     } else if (this.driver === 'mysql') {
       const queries = [
         `CREATE TABLE IF NOT EXISTS orders (
@@ -194,6 +205,10 @@ class DatabaseAdapter {
           store_code VARCHAR(100),
           store_id VARCHAR(100),
           store_name VARCHAR(255),
+          assigned_machine VARCHAR(100),
+          intake_at VARCHAR(100),
+          engraving_started_at VARCHAR(100),
+          ready_at VARCHAR(100),
           created_at VARCHAR(100),
           updated_at VARCHAR(100),
           INDEX idx_orders_intake (intake_code),
@@ -264,6 +279,12 @@ class DatabaseAdapter {
       for (const q of queries) {
         await this.mysqlPool.query(q);
       }
+
+      for (const col of ['assigned_machine VARCHAR(100)', 'intake_at VARCHAR(100)', 'engraving_started_at VARCHAR(100)', 'ready_at VARCHAR(100)']) {
+        try {
+          await this.mysqlPool.query(`ALTER TABLE orders ADD COLUMN ${col};`);
+        } catch (e) {}
+      }
     } else {
       this.sqliteDb.exec(`
         CREATE TABLE IF NOT EXISTS orders (
@@ -280,6 +301,10 @@ class DatabaseAdapter {
           store_code TEXT,
           store_id TEXT,
           store_name TEXT,
+          assigned_machine TEXT,
+          intake_at TEXT,
+          engraving_started_at TEXT,
+          ready_at TEXT,
           created_at TEXT,
           updated_at TEXT
         );
@@ -354,6 +379,10 @@ class DatabaseAdapter {
       try {
         this.sqliteDb.exec(`ALTER TABLE stores ADD COLUMN phone TEXT;`);
       } catch (e) {}
+      try { this.sqliteDb.exec(`ALTER TABLE orders ADD COLUMN assigned_machine TEXT;`); } catch (e) {}
+      try { this.sqliteDb.exec(`ALTER TABLE orders ADD COLUMN intake_at TEXT;`); } catch (e) {}
+      try { this.sqliteDb.exec(`ALTER TABLE orders ADD COLUMN engraving_started_at TEXT;`); } catch (e) {}
+      try { this.sqliteDb.exec(`ALTER TABLE orders ADD COLUMN ready_at TEXT;`); } catch (e) {}
     }
   }
 

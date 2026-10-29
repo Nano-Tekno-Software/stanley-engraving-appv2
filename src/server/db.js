@@ -160,18 +160,19 @@ async function seedDefaultMasterData() {
     // Check if stored settings contain legacy Indonesian strings and automatically migrate them
     try {
       let hasIndonesian = false;
+      const indonesianRegex = /pesanan|antrian|telah diterima|siap diambil|terima kasih sudah menunggu|terima kasih telah berbelanja/i;
       for (const storeKey of Object.keys(storedNotifs)) {
         const storeObj = storedNotifs[storeKey];
         if (storeObj && Array.isArray(storeObj.profiles)) {
           for (const p of storeObj.profiles) {
-            if (p && typeof p.message === 'string') {
-              if (p.message.includes('Saat ini antrian di store kami') || p.message.includes('Terima kasih sudah menunggu')) {
+            if (p && typeof p.message === 'string' && indonesianRegex.test(p.message)) {
+              if (p.triggerType === 'queue_threshold') {
                 p.message = 'Hi! Currently our store queue at {store_name} has more than 10 orders. Thank you for your patience, we will begin engraving your custom Stanley soon.';
                 hasIndonesian = true;
-              } else if (p.message.includes('Pesanan kamu #{short_code} telah diterima')) {
+              } else if (p.triggerType === 'order_accepted') {
                 p.message = 'Hi {customer_name}! Your custom Stanley order #{short_code} has been received at {store_name}. Please wait while we engrave your cup.';
                 hasIndonesian = true;
-              } else if (p.message.includes('sudah selesai dan siap diambil') || p.message.includes('Terima kasih telah berbelanja di Stanley')) {
+              } else if (p.triggerType === 'order_completed') {
                 p.message = 'Hi {customer_name}! Your custom Stanley order #{short_code} is engraved and ready for pickup at {store_name}. Thank you for shopping with Stanley!';
                 hasIndonesian = true;
               }
@@ -181,6 +182,7 @@ async function seedDefaultMasterData() {
       }
       if (hasIndonesian) {
         await saveSettingsInDb('whatsapp_notifications', storedNotifs);
+        console.log('✓ Successfully migrated legacy Indonesian WhatsApp templates in database to English');
       }
     } catch (e) {
       console.warn('Could not check/migrate legacy whatsapp_notifications:', e);
@@ -389,8 +391,9 @@ export async function saveAllOrdersToDb(orders, storeId) {
       INSERT OR REPLACE INTO orders (
         order_id, short_code, system_queue_number, intake_code, status,
         customer_name, phone, email, items_json, duration_seconds,
-        store_code, store_id, store_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        store_code, store_id, store_name, assigned_machine, intake_at,
+        engraving_started_at, ready_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       o.order_id,
       o.short_code || '',
@@ -405,6 +408,10 @@ export async function saveAllOrdersToDb(orders, storeId) {
       o.store_code || finalStore,
       o.store_id || finalStore,
       o.store_name || '',
+      o.assigned_machine || null,
+      o.intake_at || null,
+      o.engraving_started_at || null,
+      o.ready_at || null,
       o.created_at || new Date().toISOString(),
       o.updated_at || new Date().toISOString()
     ]);
@@ -440,7 +447,8 @@ export async function upsertSingleOrderInDb(order, storeId) {
       UPDATE orders SET
         short_code = ?, system_queue_number = ?, intake_code = ?, status = ?,
         customer_name = ?, phone = ?, email = ?, items_json = ?, duration_seconds = ?,
-        store_code = ?, store_id = ?, store_name = ?, updated_at = ?
+        store_code = ?, store_id = ?, store_name = ?, assigned_machine = ?,
+        intake_at = ?, engraving_started_at = ?, ready_at = ?, updated_at = ?
       WHERE order_id = ?
     `, [
       shortCode,
@@ -455,6 +463,10 @@ export async function upsertSingleOrderInDb(order, storeId) {
       order.store_code || finalStoreId,
       order.store_id || finalStoreId,
       order.store_name || existing.store_name,
+      order.assigned_machine !== undefined ? order.assigned_machine : (existing.assigned_machine || null),
+      order.intake_at || existing.intake_at || null,
+      order.engraving_started_at || existing.engraving_started_at || null,
+      order.ready_at || existing.ready_at || null,
       now,
       order.order_id
     ]);
@@ -472,8 +484,9 @@ export async function upsertSingleOrderInDb(order, storeId) {
       INSERT INTO orders (
         order_id, short_code, system_queue_number, intake_code, status,
         customer_name, phone, email, items_json, duration_seconds,
-        store_code, store_id, store_name, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        store_code, store_id, store_name, assigned_machine, intake_at,
+        engraving_started_at, ready_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       order.order_id,
       shortCode,
@@ -488,6 +501,10 @@ export async function upsertSingleOrderInDb(order, storeId) {
       order.store_code || finalStoreId,
       order.store_id || finalStoreId,
       order.store_name || '',
+      order.assigned_machine || null,
+      order.intake_at || null,
+      order.engraving_started_at || null,
+      order.ready_at || null,
       order.created_at || now,
       now
     ]);
@@ -522,7 +539,8 @@ export async function getOrderByIdFromDb(idOrCode, storeId) {
   const rows = await dbAdapter.query(sql, params);
   if (!rows || rows.length === 0) return null;
   
-  let row = rows[0];
+  // Prioritize exact order_id match if available
+  let row = rows.find(r => (r.order_id || '').toUpperCase() === cleanUpper) || rows[0];
   if (storeId && storeId !== '*' && storeId !== 'HQ Central') {
     const canonical = await getCanonicalStore(storeId);
     const aliases = canonical ? [canonical.id, canonical.code, canonical.name, ...(canonical.aliases || [])] : [storeId];

@@ -4,7 +4,7 @@ import { interpolateWhatsAppMessage, sendWhatsAppNotification } from './src/util
 console.log('\n--- Running WhatsApp Notification Personalization Tests ---');
 
 // 1. Test template variable interpolation
-const rawTemplate = 'Hi {customer_name}! Pesanan kamu #{short_code} telah diterima oleh tim kami di {store_name}. Nomor antrian kamu {queue_number}.';
+const rawTemplate = 'Hi {customer_name}! Your custom Stanley order #{short_code} has been received at {store_name}. Your queue number is {queue_number}.';
 const vars = {
   customer_name: 'Budi Santoso',
   short_code: 'EG-042',
@@ -71,6 +71,7 @@ async function runApiTests() {
     phone: '+6281233445566',
     store_id: '004',
     store_name: 'Stanley Puri Indah Mall',
+    store_phone: '0812 3456 7890',
     system_queue_number: '0010'
   };
   const waPayload = sendWhatsAppNotification(sampleOrder, 'order_completed');

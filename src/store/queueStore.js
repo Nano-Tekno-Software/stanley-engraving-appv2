@@ -7,6 +7,41 @@ import { isSameStore, getCanonicalStore } from '../utils/storeResolver.js';
 // Clean empty starting state for production deployment
 const INITIAL_SEED_ORDERS = [];
 
+function isStationControllerContext() {
+  if (typeof window === 'undefined' || !window.location || !window.location.pathname) return true;
+  const path = window.location.pathname.toLowerCase();
+  // Public customer-facing routes should never act as station controllers
+  if (path.startsWith('/queue') || path.startsWith('/track') || path === '/' || path.includes('customize')) {
+    return false;
+  }
+  return true;
+}
+
+function mergeOrdersPreservingLocalProgress(existingOrders, incomingOrders) {
+  if (!Array.isArray(incomingOrders)) return existingOrders;
+  if (!Array.isArray(existingOrders) || existingOrders.length === 0) return incomingOrders;
+
+  return incomingOrders.map(remoteOrder => {
+    const local = existingOrders.find(o => o.order_id === remoteOrder.order_id);
+    if (!local) return remoteOrder;
+    // Protect ready_for_pickup from being downgraded by stale server state
+    if (local.status === 'ready_for_pickup' && remoteOrder.status !== 'ready_for_pickup') {
+      return { ...remoteOrder, status: 'ready_for_pickup', ready_at: local.ready_at || remoteOrder.ready_at };
+    }
+    // Protect in_queue from being downgraded to pending_dropoff
+    if (local.status === 'in_queue' && remoteOrder.status === 'pending_dropoff') {
+      return {
+        ...remoteOrder,
+        status: 'in_queue',
+        intake_at: local.intake_at || remoteOrder.intake_at,
+        system_queue_number: local.system_queue_number || remoteOrder.system_queue_number,
+        short_code: local.short_code || remoteOrder.short_code
+      };
+    }
+    return remoteOrder;
+  });
+}
+
 export const useQueueStore = defineStore('queue', {
   state: () => {
     const defaultMachines = [
@@ -135,29 +170,54 @@ export const useQueueStore = defineStore('queue', {
 
   actions: {
     async refreshFromStorage(storeId = null) {
+      const targetStore = storeId || (typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null);
       // Fetch central cloud server orders
-      const remote = await fetchServerOrders(storeId);
+      const remote = await fetchServerOrders(targetStore);
       if (remote && Array.isArray(remote)) {
-        this.orders = remote;
+        this.orders = mergeOrdersPreservingLocalProgress(this.orders, remote);
       }
-      await this.refreshMachinesFromStorage();
-      this.autoAssignMachines();
+      await this.refreshMachinesFromStorage(targetStore);
+      if (isStationControllerContext()) {
+        this.autoAssignMachines(targetStore);
+      }
     },
 
-    async refreshMachinesFromStorage() {
+    async refreshMachinesFromStorage(targetStoreId = null) {
       try {
-        if (typeof fetch !== 'undefined') {
-          const res = await fetch('/api/machines');
-          if (res.ok) {
-            const data = await res.json();
-            if (Array.isArray(data) && data.length > 0) {
-              data.forEach(storedM => {
+        if (typeof localStorage !== 'undefined') {
+          const localData = localStorage.getItem('stanley_machines_state');
+          if (localData) {
+            const parsed = JSON.parse(localData);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              parsed.forEach(storedM => {
                 const target = this.machines.find(m => m.id === storedM.id);
                 if (target) {
-                  target.status = storedM.status;
-                  target.currentOrderId = storedM.currentOrderId;
-                  target.timerSeconds = storedM.timerSeconds;
-                  target.currentItemIndex = storedM.currentItemIndex;
+                  target.status = storedM.status || 'idle';
+                  target.currentOrderId = storedM.currentOrderId || null;
+                  target.timerSeconds = storedM.timerSeconds || 0;
+                  target.currentItemIndex = storedM.currentItemIndex || 0;
+                  if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
+                }
+              });
+            }
+          }
+        }
+
+        if (typeof window !== 'undefined' && window.location && typeof fetch !== 'undefined') {
+          const storeId = targetStoreId || (typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null);
+          const storeParam = storeId && storeId !== '*' && storeId !== 'HQ Central' ? `?storeId=${encodeURIComponent(storeId)}` : '';
+          const res = await fetch(`/api/machines${storeParam}`);
+          if (res.ok) {
+            const data = await res.json();
+            const list = Array.isArray(data) ? data : (data?.machines || []);
+            if (Array.isArray(list) && list.length > 0) {
+              list.forEach(storedM => {
+                const target = this.machines.find(m => m.id === storedM.id);
+                if (target) {
+                  target.status = storedM.status || 'idle';
+                  target.currentOrderId = storedM.currentOrderId || null;
+                  target.timerSeconds = storedM.timerSeconds || 0;
+                  target.currentItemIndex = storedM.currentItemIndex || 0;
                   if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
                 }
               });
@@ -167,15 +227,21 @@ export const useQueueStore = defineStore('queue', {
       } catch (e) {}
     },
 
-    async saveMachinesState() {
+    saveMachinesState() {
+      if (!isStationControllerContext()) return;
       try {
-        broadcastSyncMessage('machines_updated', this.machines);
-        if (typeof fetch !== 'undefined') {
-          await fetch('/api/machines', {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('stanley_machines_state', JSON.stringify(this.machines));
+        }
+        const storeId = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+        broadcastSyncMessage('machines_updated', { storeId, machines: this.machines });
+        if (typeof window !== 'undefined' && window.location && typeof fetch !== 'undefined') {
+          const storeParam = storeId && storeId !== '*' && storeId !== 'HQ Central' ? `?storeId=${encodeURIComponent(storeId)}` : '';
+          fetch(`/api/machines${storeParam}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(this.machines)
-          });
+            body: JSON.stringify({ machines: this.machines, storeId })
+          }).catch(() => {});
         }
       } catch (e) {}
     },
@@ -191,19 +257,30 @@ export const useQueueStore = defineStore('queue', {
         channel.onmessage = (event) => {
           const { type, payload } = event.data || {};
           if (type === 'orders_updated' && Array.isArray(payload)) {
-            this.orders = payload;
-            this.autoAssignMachines();
-          } else if (type === 'machines_updated' && Array.isArray(payload)) {
-            payload.forEach(storedM => {
-              const target = this.machines.find(m => m.id === storedM.id);
-              if (target) {
-                target.status = storedM.status;
-                target.currentOrderId = storedM.currentOrderId;
-                target.timerSeconds = storedM.timerSeconds;
-                target.currentItemIndex = storedM.currentItemIndex;
-                if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
-              }
-            });
+            this.orders = mergeOrdersPreservingLocalProgress(this.orders, payload);
+            if (isStationControllerContext()) {
+              const targetStore = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+              this.autoAssignMachines(targetStore);
+            }
+          } else if (type === 'machines_updated') {
+            const list = Array.isArray(payload) ? payload : (payload?.machines || []);
+            const eventStoreId = payload?.storeId;
+            const localStoreId = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+            if (eventStoreId && localStoreId && !isSameStore(eventStoreId, localStoreId)) {
+              return; // Ignore other store's machines!
+            }
+            if (Array.isArray(list)) {
+              list.forEach(storedM => {
+                const target = this.machines.find(m => m.id === storedM.id);
+                if (target) {
+                  target.status = storedM.status || 'idle';
+                  target.currentOrderId = storedM.currentOrderId || null;
+                  target.timerSeconds = storedM.timerSeconds || 0;
+                  target.currentItemIndex = storedM.currentItemIndex || 0;
+                  if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
+                }
+              });
+            }
           }
         };
       }
@@ -228,27 +305,36 @@ export const useQueueStore = defineStore('queue', {
             try {
               const updated = JSON.parse(e.data);
               if (Array.isArray(updated)) {
-                this.orders = updated;
-                this.autoAssignMachines();
-                window.dispatchEvent(new CustomEvent('stanley_orders_updated', { detail: updated }));
+                this.orders = mergeOrdersPreservingLocalProgress(this.orders, updated);
+                if (isStationControllerContext()) {
+                  const targetStore = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+                  this.autoAssignMachines(targetStore);
+                }
+                window.dispatchEvent(new CustomEvent('stanley_orders_updated', { detail: this.orders }));
               }
             } catch (err) {}
           });
           sseInstance.addEventListener('machines_updated', (e) => {
             try {
-              const updated = JSON.parse(e.data);
-              if (Array.isArray(updated)) {
-                updated.forEach(storedM => {
+              const rawData = JSON.parse(e.data);
+              const list = Array.isArray(rawData) ? rawData : (rawData?.machines || []);
+              const eventStoreId = rawData?.storeId;
+              const localStoreId = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+              if (eventStoreId && localStoreId && !isSameStore(eventStoreId, localStoreId)) {
+                return; // Ignore other store's machines!
+              }
+              if (Array.isArray(list)) {
+                list.forEach(storedM => {
                   const target = this.machines.find(m => m.id === storedM.id);
                   if (target) {
-                    target.status = storedM.status;
-                    target.currentOrderId = storedM.currentOrderId;
-                    target.timerSeconds = storedM.timerSeconds;
-                    target.currentItemIndex = storedM.currentItemIndex;
+                    target.status = storedM.status || 'idle';
+                    target.currentOrderId = storedM.currentOrderId || null;
+                    target.timerSeconds = storedM.timerSeconds || 0;
+                    target.currentItemIndex = storedM.currentItemIndex || 0;
                     if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
                   }
                 });
-                window.dispatchEvent(new CustomEvent('stanley_machines_updated', { detail: updated }));
+                window.dispatchEvent(new CustomEvent('stanley_machines_updated', { detail: list }));
               }
             } catch (err) {}
           });
@@ -633,6 +719,17 @@ export const useQueueStore = defineStore('queue', {
         };
       }
 
+      if (order.status === 'in_queue') {
+        const qNum = order.system_queue_number || order.short_code || cleanCode;
+        return {
+          success: true,
+          order,
+          alreadyInQueue: true,
+          nextQueueNumber: qNum,
+          message: `Order #${qNum} has already been received and is currently in queue.`
+        };
+      }
+
       const storeForNumber = order.store_id || order.store_code || order.store_name || targetStore;
       const nextQueueNumber = this.getNextSystemQueueNumber(storeForNumber);
 
@@ -686,6 +783,8 @@ export const useQueueStore = defineStore('queue', {
         }
       }
 
+      const isAlreadyInQueue = order.status === 'in_queue';
+
       let newQueueNumber = order.system_queue_number;
       if (!newQueueNumber) {
         const storeForNumber = order.store_id || order.store_code || order.store_name || targetStore;
@@ -696,43 +795,63 @@ export const useQueueStore = defineStore('queue', {
       order.status = 'in_queue';
       order.system_queue_number = newQueueNumber;
       order.short_code = newQueueNumber; // Update ticket code to #0021
-      order.intake_at = new Date().toISOString();
+      if (!order.intake_at) {
+        order.intake_at = new Date().toISOString();
+      }
       
-      saveStoredOrders(this.orders);
-      this.autoAssignMachines();
-
-      try {
-        if (typeof fetch !== 'undefined' && order.order_id) {
+      // AWAIT server persistence BEFORE notifying customer to eliminate race conditions
+      if (typeof window !== 'undefined' && window.location && typeof fetch !== 'undefined' && order.order_id) {
+        try {
           const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
           const headers = { 'Content-Type': 'application/json' };
           if (token) headers['Authorization'] = `Bearer ${token}`;
-          fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
+          const putRes = await fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
             method: 'PUT',
             headers,
             body: JSON.stringify(order)
-          }).catch(() => {});
+          });
+          if (putRes.ok) {
+            const data = await putRes.json();
+            if (data?.order) {
+              Object.assign(order, data.order);
+            }
+          }
+        } catch (e) {
+          console.warn('Network error syncing intake to server:', e);
         }
-      } catch (e) {}
+      }
 
-      // Trigger WhatsApp notification for order received / accepted
-      sendWhatsAppNotification(order, 'order_accepted');
+      saveStoredOrders(this.orders);
+      if (isStationControllerContext()) {
+        this.autoAssignMachines(targetStore);
+      }
+
+      // Trigger WhatsApp notification for order received / accepted ONLY if not already notified / in-queue
+      if (!isAlreadyInQueue) {
+        sendWhatsAppNotification(order, 'order_accepted');
+      }
 
       return {
         success: true,
         order,
         newQueueNumber,
-        message: `Cup intake confirmed! Assigned Queue #${newQueueNumber}.`
+        message: isAlreadyInQueue
+          ? `Order #${newQueueNumber} is already in the queue. Updated station assignment.`
+          : `Cup intake confirmed! Assigned Queue #${newQueueNumber}.`
       };
     },
 
     /**
      * Auto-Pull Engine:
-     * 1. Validate existing machine assignments against actual active orders.
+     * 1. Validate existing machine assignments against actual active orders and isolated store.
      * 2. Release orders from disabled/inactive machines immediately back to the queue pool.
      * 3. Clean up stale/completed/cancelled order IDs.
      * 4. Pull top pending orders into any active idle machines (Machine 01 first for oldest Customer A, then Machine 02 for Customer B, Customer 03 waits).
      */
-    autoAssignMachines() {
+    autoAssignMachines(targetStoreId = null) {
+      if (!isStationControllerContext()) return;
+      const storeId = targetStoreId || (typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null);
+
       // Step 1: Clean up invalid/completed orders OR orders on INACTIVE machines
       for (const machine of this.machines) {
         if (machine.isActive === false) {
@@ -751,7 +870,11 @@ export const useQueueStore = defineStore('queue', {
           }
         } else if (machine.currentOrderId) {
           const assignedOrder = this.orders.find(o => o.order_id === machine.currentOrderId);
-          if (!assignedOrder || assignedOrder.status === 'ready_for_pickup' || assignedOrder.status === 'cancelled' || assignedOrder.status === 'pending_dropoff') {
+          const isStoreMismatch = (storeId && storeId !== '*' && storeId !== 'HQ Central' && assignedOrder)
+            ? !(isSameStore(assignedOrder.store_id, storeId) || isSameStore(assignedOrder.store_code, storeId) || isSameStore(assignedOrder.store_name, storeId))
+            : false;
+
+          if (!assignedOrder || isStoreMismatch || assignedOrder.status === 'ready_for_pickup' || assignedOrder.status === 'cancelled' || assignedOrder.status === 'pending_dropoff') {
             machine.currentOrderId = null;
             machine.status = 'idle';
             machine.timerSeconds = 0;
@@ -768,10 +891,15 @@ export const useQueueStore = defineStore('queue', {
 
       // Step 3: Find available queued orders not yet on an active online station, sorted oldest first (FIFO)
       const availablePending = this.orders
-        .filter(o => 
-          (o.status === 'in_queue' || o.status === 'engraving_in_progress') && 
-          !currentlyAssignedIds.includes(o.order_id)
-        )
+        .filter(o => {
+          if (o.status !== 'in_queue' && o.status !== 'engraving_in_progress') return false;
+          if (currentlyAssignedIds.includes(o.order_id)) return false;
+          if (storeId && storeId !== '*' && storeId !== 'HQ Central') {
+            const match = isSameStore(o.store_id, storeId) || isSameStore(o.store_code, storeId) || isSameStore(o.store_name, storeId);
+            if (!match) return false;
+          }
+          return true;
+        })
         .slice()
         .sort((a, b) => {
           const timeA = new Date(a.intake_at || a.created_at || 0).getTime();
@@ -869,30 +997,6 @@ export const useQueueStore = defineStore('queue', {
       }
     },
 
-    saveMachinesState() {
-      try {
-        localStorage.setItem('stanley_machines_state', JSON.stringify(this.machines));
-        broadcastSyncMessage('machines_updated', this.machines);
-      } catch (e) {}
-    },
-
-    refreshMachinesFromStorage() {
-      try {
-        const data = localStorage.getItem('stanley_machines_state');
-        if (data) {
-          const parsed = JSON.parse(data);
-          if (Array.isArray(parsed)) {
-            parsed.forEach(storedM => {
-              const target = this.machines.find(m => m.id === storedM.id);
-              if (target) {
-                if (storedM.isActive !== undefined) target.isActive = storedM.isActive;
-              }
-            });
-          }
-        }
-      } catch (e) {}
-    },
-
     startMachine(machineId) {
       const machine = this.machines.find(m => m.id === machineId);
       if (!machine || !machine.currentOrderId) return;
@@ -907,18 +1011,16 @@ export const useQueueStore = defineStore('queue', {
         order.engraving_started_at = new Date().toISOString();
         saveStoredOrders(this.orders);
 
-        try {
-          if (typeof fetch !== 'undefined') {
-            const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-            fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
-              method: 'PUT',
-              headers,
-              body: JSON.stringify(order)
-            }).catch(() => {});
-          }
-        } catch (e) {}
+        if (typeof window !== 'undefined' && window.location && typeof fetch !== 'undefined') {
+          const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(order)
+          }).catch(e => console.warn('Network error saving engraving status:', e));
+        }
       }
 
       this.saveMachinesState();
@@ -949,24 +1051,24 @@ export const useQueueStore = defineStore('queue', {
           text: currentItem.text
         });
 
-        sendWhatsAppNotification(order);
-
+        // Update status in local memory immediately
         order.status = 'ready_for_pickup';
         order.ready_at = new Date().toISOString();
         saveStoredOrders(this.orders);
 
-        try {
-          if (typeof fetch !== 'undefined') {
-            const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = `Bearer ${token}`;
-            fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
-              method: 'PUT',
-              headers,
-              body: JSON.stringify(order)
-            }).catch(() => {});
-          }
-        } catch (e) {}
+        if (typeof window !== 'undefined' && window.location && typeof fetch !== 'undefined') {
+          const token = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_staff_token') : null;
+          const headers = { 'Content-Type': 'application/json' };
+          if (token) headers['Authorization'] = `Bearer ${token}`;
+          fetch(`/api/orders/${encodeURIComponent(order.order_id)}`, {
+            method: 'PUT',
+            headers,
+            body: JSON.stringify(order)
+          }).catch(e => console.warn('Network error saving completed order status:', e));
+        }
+
+        // Send pickup notification to customer with updated ready_for_pickup status
+        sendWhatsAppNotification(order, 'order_completed');
       }
 
       machine.status = 'idle';
@@ -975,7 +1077,10 @@ export const useQueueStore = defineStore('queue', {
       machine.timerSeconds = 0;
 
       this.saveMachinesState();
-      this.autoAssignMachines();
+      const storeId = typeof localStorage !== 'undefined' ? localStorage.getItem('stanley_user_store') : null;
+      if (isStationControllerContext()) {
+        this.autoAssignMachines(storeId);
+      }
     },
 
     tickTimers() {

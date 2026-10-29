@@ -357,7 +357,6 @@ async function fetchOrder() {
         if (isMatch) {
           fallbackOrder.value = serverOrder;
           isNotFound.value = false;
-          queueStore.upsertOrder(serverOrder);
           return;
         }
       }

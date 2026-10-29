@@ -421,25 +421,40 @@ app.delete('/api/orders/:id', async (req, res) => {
 // CENTRAL CLOUD MACHINES STATE ENDPOINTS
 // ----------------------------------------------------
 
-// GET /api/machines - Get real-time laser machines state across network
+// GET /api/machines - Get real-time laser machines state across network (with optional store scoping)
 app.get('/api/machines', async (req, res) => {
   try {
-    const machines = (await getSettingsFromDb('machines')) || [];
+    const storeId = req.query.storeId || req.query.store || null;
+    let machines = null;
+    if (storeId && storeId !== '*' && storeId !== 'HQ Central') {
+      machines = await getSettingsFromDb(`machines_${storeId}`);
+    }
+    if (!machines || !Array.isArray(machines) || machines.length === 0) {
+      machines = (await getSettingsFromDb('machines')) || [];
+    }
     res.json(machines);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/machines - Sync real-time laser machines state to cloud DB
+// POST /api/machines - Sync real-time laser machines state to cloud DB (scoped by store)
 app.post('/api/machines', async (req, res) => {
   try {
-    const machines = req.body;
+    const isArrayBody = Array.isArray(req.body);
+    const machines = isArrayBody ? req.body : req.body.machines;
+    const storeId = req.query.storeId || req.query.store || (!isArrayBody ? req.body.storeId : null);
+
     if (!Array.isArray(machines)) {
       return res.status(400).json({ error: 'Machines must be an array' });
     }
-    const saved = await saveSettingsInDb('machines', machines);
-    broadcast('machines_updated', saved);
+    let saved = null;
+    if (storeId && storeId !== '*' && storeId !== 'HQ Central') {
+      saved = await saveSettingsInDb(`machines_${storeId}`, machines);
+    } else {
+      saved = await saveSettingsInDb('machines', machines);
+    }
+    broadcast('machines_updated', { storeId, machines: saved });
     res.json({ success: true, machines: saved });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -699,25 +714,122 @@ app.post('/api/whatsapp/:storeId/send-test', requireAdminAccess, async (req, res
 });
 
 // POST Dispatch automated notification (Queue, Completion, Pickup)
+const recentServerWhatsAppDispatches = new Map();
+
 app.post('/api/whatsapp/:storeId/dispatch', async (req, res) => {
   try {
-    const { recipientPhone, message, orderId, triggerType } = req.body;
-    if (!recipientPhone || !message) {
-      return res.status(400).json({ error: 'recipientPhone and message are required' });
+    const { recipientPhone, message, orderId, triggerType, customerName, shortCode, storeName, queueNumber } = req.body;
+
+    let order = null;
+    if (orderId) {
+      try {
+        order = await getOrderByIdFromDb(orderId);
+      } catch (e) {}
     }
-    const result = await sendStoreWhatsAppMessage(req.params.storeId, recipientPhone, message);
+
+    const phone = recipientPhone || order?.phone;
+    if (!phone) {
+      return res.status(400).json({ error: 'recipientPhone or valid orderId is required' });
+    }
+
+    const resolvedCustomer = customerName || req.body.recipientName || order?.customer_name || 'Customer';
+    const resolvedShortCode = shortCode || order?.short_code || order?.intake_code || '';
+    const resolvedStore = storeName || order?.store_name || 'Stanley Store';
+    const resolvedOrderId = orderId || order?.order_id || '';
+    const resolvedQueue = queueNumber || order?.system_queue_number || resolvedShortCode || '';
+    const resolvedTriggerType = triggerType || 'order_completed';
+
+    // Anti-spam deduplication: Don't dispatch identical notification triggers for the same order within 2 minutes
+    if (resolvedOrderId) {
+      const dedupKey = `${resolvedOrderId}_${resolvedTriggerType}`;
+      const lastDispatched = recentServerWhatsAppDispatches.get(dedupKey);
+      if (lastDispatched && (Date.now() - lastDispatched.timestamp < 120000)) {
+        console.log(`[WHATSAPP GATEWAY] Deduplicating dispatch for ${dedupKey} (already sent ${Math.round((Date.now() - lastDispatched.timestamp)/1000)}s ago)`);
+        return res.json({
+          success: true,
+          deduped: true,
+          message: lastDispatched.message,
+          info: 'Duplicate notification suppressed within 2-minute cooling window.'
+        });
+      }
+    }
+
+    // Check if incoming client message contains legacy Indonesian phrases or is missing
+    const hasIndonesian = /pesanan|antrian|telah diterima|siap diambil|terima kasih sudah menunggu|terima kasih telah berbelanja/i.test(message || '');
+
+    let finalMessage = '';
+
+    // Always prioritize central database templates for automated triggers or if Indonesian text was passed
+    if (!message || hasIndonesian || triggerType) {
+      try {
+        const waSettings = (await getSettingsFromDb('whatsapp_notifications')) || {};
+        const storeKey = req.params.storeId || order?.store_id || order?.store_code || 'default';
+        const storeConfig = waSettings[storeKey] || waSettings['default'] || Object.values(waSettings)[0] || {};
+        const profiles = Array.isArray(storeConfig.profiles) ? storeConfig.profiles : [];
+        const matched = profiles.find(p => p.triggerType === triggerType && p.isActive);
+
+        if (matched && matched.message) {
+          finalMessage = matched.message
+            .replace(/\{customer_name\}/gi, resolvedCustomer)
+            .replace(/\{short_code\}/gi, resolvedShortCode)
+            .replace(/\{store_name\}/gi, resolvedStore)
+            .replace(/\{order_id\}/gi, resolvedOrderId)
+            .replace(/\{queue_number\}/gi, resolvedQueue);
+        }
+      } catch (dbErr) {
+        console.warn('Could not load WhatsApp template from database:', dbErr.message);
+      }
+    }
+
+    // Safety fallback to canonical English notification if not resolved or still contains legacy phrases
+    if (!finalMessage || /pesanan|antrian|telah diterima|siap diambil/i.test(finalMessage)) {
+      if (message && !hasIndonesian) {
+        finalMessage = message;
+      } else {
+        const host = req.get('host') || 'localhost:3000';
+        const protocol = req.protocol || 'http';
+        const origin = `${protocol}://${host}`;
+        const ticketCode = resolvedShortCode || resolvedQueue || resolvedOrderId;
+
+        if (triggerType === 'order_accepted') {
+          finalMessage = `Hi ${resolvedCustomer}! Your custom Stanley order #${ticketCode} has been received at ${resolvedStore}. Please wait while we engrave your cup. Track status: ${origin}/queue/${resolvedOrderId}`;
+        } else if (triggerType === 'queue_threshold') {
+          finalMessage = `Hi ${resolvedCustomer}! Our store queue at ${resolvedStore} is currently busy. Thank you for your patience, we will begin engraving your custom Stanley soon. Track queue: ${origin}/queue/${resolvedOrderId}`;
+        } else {
+          finalMessage = `Hi ${resolvedCustomer}! Your custom Stanley order #${ticketCode} is engraved and ready for pickup at ${resolvedStore}. Thank you for shopping with Stanley! Check ticket: ${origin}/queue/${resolvedOrderId}`;
+        }
+      }
+    }
+
+    const result = await sendStoreWhatsAppMessage(req.params.storeId, phone, finalMessage);
     
     // Broadcast notification event to SSE
     broadcast('whatsapp_notification_dispatched', {
       storeId: req.params.storeId,
-      orderId,
-      triggerType,
-      recipientPhone,
+      orderId: resolvedOrderId,
+      triggerType: triggerType || 'order_completed',
+      recipientPhone: phone,
+      message: finalMessage,
       success: result.success,
       timestamp: new Date().toISOString()
     });
 
-    res.json(result);
+    // Record successful dispatch into deduplication cache
+    if (result.success && resolvedOrderId) {
+      const dedupKey = `${resolvedOrderId}_${resolvedTriggerType}`;
+      recentServerWhatsAppDispatches.set(dedupKey, {
+        timestamp: Date.now(),
+        message: finalMessage
+      });
+      if (recentServerWhatsAppDispatches.size > 500) {
+        const cutoff = Date.now() - 600000;
+        for (const [k, v] of recentServerWhatsAppDispatches.entries()) {
+          if (v.timestamp < cutoff) recentServerWhatsAppDispatches.delete(k);
+        }
+      }
+    }
+
+    res.json({ ...result, message: finalMessage });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
