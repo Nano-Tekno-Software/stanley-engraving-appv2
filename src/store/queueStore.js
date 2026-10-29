@@ -390,21 +390,26 @@ export const useQueueStore = defineStore('queue', {
         }
       });
 
-      // Synchronize immediately when user focuses or returns to the tab
+      // Synchronize immediately when staff returns to the station tab
       if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') {
+          if (document.visibilityState === 'visible' && isStationControllerContext()) {
             this.refreshFromStorage();
           }
         });
         window.addEventListener('focus', () => {
-          this.refreshFromStorage();
+          if (isStationControllerContext()) {
+            this.refreshFromStorage();
+          }
         });
       }
 
-      // Gentle background fail-safe sync (every 15s) without hammering the network
+      // Gentle background fail-safe sync (every 15s) strictly for active station controllers
+      // Prevents customer mobile devices from polling all store orders continuously
       setInterval(() => {
-        this.refreshFromStorage();
+        if (isStationControllerContext()) {
+          this.refreshFromStorage();
+        }
       }, 15000);
     },
 

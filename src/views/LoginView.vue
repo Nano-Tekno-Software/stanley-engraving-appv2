@@ -1,11 +1,14 @@
 <template>
   <div class="login-screen">
     <!-- Fullscreen Background Image -->
-    <img 
-      src="/src/assets/images/login-bg.png" 
-      alt="Stanley Background" 
-      class="login-bg-img" 
-    />
+    <picture>
+      <source srcset="/src/assets/images/login-bg.webp" type="image/webp" />
+      <img 
+        src="/src/assets/images/login-bg.png" 
+        alt="Stanley Background" 
+        class="login-bg-img" 
+      />
+    </picture>
     
     <!-- Dark Vignette Overlay for Depth -->
     <div class="login-bg-overlay"></div>

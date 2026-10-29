@@ -90,11 +90,15 @@
               <!-- Card Body: Image + Meta -->
               <div class="machine-status-body" :class="{ 'is-body-dimmed': machine.isActive === false }">
                 <div class="machine-img-box">
-                  <img 
-                    src="/src/assets/images/laser-machine.png" 
-                    :alt="machine.name" 
-                    class="machine-visual-img" 
-                  />
+                  <picture>
+                    <source srcset="/src/assets/images/laser-machine.webp" type="image/webp" />
+                    <img 
+                      src="/src/assets/images/laser-machine.png" 
+                      :alt="machine.name" 
+                      class="machine-visual-img" 
+                      loading="lazy"
+                    />
+                  </picture>
                 </div>
 
                 <div class="machine-meta-group">

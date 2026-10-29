@@ -389,17 +389,29 @@ function startNewOrder() {
   router.push('/');
 }
 
+function handleVisibilityChange() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    fetchOrder();
+  }
+}
+
 onMounted(() => {
   fetchOrder();
   
   // Storage listeners for real-time cross-tab and centralized SSE sync
   window.addEventListener('stanley_orders_updated', checkLocalOrder);
   window.addEventListener('storage', checkLocalOrder);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener('stanley_orders_updated', checkLocalOrder);
   window.removeEventListener('storage', checkLocalOrder);
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }
 });
 </script>
 

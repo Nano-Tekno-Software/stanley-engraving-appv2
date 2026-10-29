@@ -2,11 +2,15 @@
   <div class="landing-page">
     <!-- Full-bleed background image -->
     <div class="bg-image-container">
-      <img 
-        src="/src/assets/images/landing-bg.png" 
-        alt="Stanley Lifestyle" 
-        class="bg-image"
-      />
+      <picture>
+        <source srcset="/src/assets/images/landing-bg.webp" type="image/webp" />
+        <img 
+          src="/src/assets/images/landing-bg.png" 
+          alt="Stanley Lifestyle" 
+          class="bg-image"
+          fetchpriority="high"
+        />
+      </picture>
       <div class="bg-gradient-overlay"></div>
     </div>
 

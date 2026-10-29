@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -50,6 +51,18 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+
+// High-performance gzip/brotli HTTP compression for all static assets and JSON API payloads
+// Explicitly skips Server-Sent Events (SSE) to ensure immediate event streaming without buffering
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers.accept && req.headers.accept.includes('text/event-stream')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  }
+}));
+
 app.use(express.json({ limit: '2mb' }));
 
 // Initialize database (PostgreSQL, MySQL, or SQLite)
@@ -836,11 +849,29 @@ app.post('/api/whatsapp/:storeId/dispatch', async (req, res) => {
 });
 
 
-// Serve frontend static build assets
+// Serve frontend static build assets with optimal caching headers
 const distPath = path.join(__dirname, 'dist');
 if (fs.existsSync(distPath)) {
-  app.use(express.static(distPath));
+  // 1. Immutable 1-year caching for Vite-generated hashed chunks, css, and images
+  app.use('/assets', express.static(path.join(distPath, 'assets'), {
+    maxAge: '1y',
+    immutable: true
+  }));
+
+  // 2. Short-term caching for root static assets (favicons, manifests, etc.)
+  app.use(express.static(distPath, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+      }
+    }
+  }));
+
+  // 3. SPA index.html fallback with no-cache to guarantee instantaneous deployment updates
   app.use((req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.sendFile(path.join(distPath, 'index.html'));
   });
 }

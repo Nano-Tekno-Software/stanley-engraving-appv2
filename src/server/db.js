@@ -335,9 +335,9 @@ export async function getNextQueueNumberFromDb(storeId, dateStr = null) {
   const rows = await dbAdapter.query(`
     SELECT system_queue_number, short_code, store_id, store_code, store_name, created_at
     FROM orders
-    WHERE (created_at LIKE ? OR created_at LIKE ?)
+    WHERE created_at LIKE ?
       AND status IN ('in_queue', 'engraving_in_progress', 'ready_for_pickup')
-  `, [`${dateVal}%`, `%${dateVal}%`]);
+  `, [`${dateVal}%`]);
 
   let highest = 0;
   for (const r of rows) {
@@ -360,20 +360,32 @@ export async function getNextQueueNumberFromDb(storeId, dateStr = null) {
 }
 
 export async function getAllOrdersFromDb(storeId) {
-  const allRows = await dbAdapter.query(`SELECT * FROM orders ORDER BY created_at DESC`);
-  let rows = allRows;
+  let rows;
 
   if (storeId && storeId !== '*' && storeId !== 'HQ Central') {
     const canonical = await getCanonicalStore(storeId);
     const aliases = canonical ? [canonical.id, canonical.code, canonical.name, ...(canonical.aliases || [])] : [storeId];
-    const cleanAliases = aliases.map(a => String(a).trim().toLowerCase()).filter(Boolean);
+    const cleanAliases = [...new Set([
+      ...aliases.map(a => String(a).trim().toLowerCase()),
+      ...aliases.map(a => String(a).trim().toUpperCase())
+    ])].filter(Boolean);
 
-    rows = allRows.filter(r => {
-      const sId = String(r.store_id || '').trim().toLowerCase();
-      const sCode = String(r.store_code || '').trim().toLowerCase();
-      const sName = String(r.store_name || '').trim().toLowerCase();
-      return cleanAliases.includes(sId) || cleanAliases.includes(sCode) || cleanAliases.includes(sName);
-    });
+    if (cleanAliases.length > 0) {
+      // Fast SQL query utilizing indexed store_id column and case-insensitive alias matching
+      const placeholders = cleanAliases.map(() => '?').join(',');
+      const params = [...cleanAliases, ...cleanAliases, ...cleanAliases];
+      rows = await dbAdapter.query(`
+        SELECT * FROM orders 
+        WHERE store_id IN (${placeholders})
+           OR store_code IN (${placeholders})
+           OR store_name IN (${placeholders})
+        ORDER BY created_at DESC
+      `, params);
+    } else {
+      rows = await dbAdapter.query(`SELECT * FROM orders ORDER BY created_at DESC`);
+    }
+  } else {
+    rows = await dbAdapter.query(`SELECT * FROM orders ORDER BY created_at DESC`);
   }
 
   return rows.map(r => ({
@@ -522,16 +534,16 @@ export async function getOrderByIdFromDb(idOrCode, storeId) {
   const cleanUpper = rawClean.toUpperCase();
   const subCode = clean.split('-').pop().toUpperCase();
   
-  // Fast query using exact matches on indexed columns
+  // Fast query using exact matches on indexed columns (direct column comparison enables B-Tree index seeks)
   const sql = `
     SELECT * FROM orders 
-    WHERE UPPER(order_id) = ? 
-       OR UPPER(order_id) LIKE ?
-       OR UPPER(intake_code) = ? 
-       OR UPPER(intake_code) = ?
-       OR UPPER(short_code) = ? 
-       OR UPPER(short_code) = ?
-       OR UPPER(system_queue_number) = ?
+    WHERE order_id = ? 
+       OR order_id LIKE ?
+       OR intake_code = ? 
+       OR intake_code = ?
+       OR short_code = ? 
+       OR short_code = ?
+       OR system_queue_number = ?
     ORDER BY created_at DESC LIMIT 10
   `;
   const params = [cleanUpper, `%${cleanUpper}`, cleanUpper, subCode, cleanUpper, subCode, cleanUpper];
